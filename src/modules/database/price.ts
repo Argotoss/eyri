@@ -1,3 +1,4 @@
+import { fetchTickerPrice } from "../tickers/price.ts";
 import type { Database } from "./setup.ts";
 
 export type Price = {
@@ -47,4 +48,18 @@ export async function getPrices(
       prices.find((price) => price.ticker === ticker) ?? null,
     ]),
   );
+}
+
+export async function refreshPersistentPrice(
+  database: Database,
+  ticker: string,
+) {
+  const currentPrice = await fetchTickerPrice(ticker);
+  if (currentPrice) {
+    await savePrice({
+      database,
+      ticker,
+      price: currentPrice,
+    });
+  }
 }

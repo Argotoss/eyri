@@ -4,15 +4,10 @@ import type { Database } from "../database/setup.ts";
 import { findOrCreateUser } from "../database/user.ts";
 import { startComposer } from "../start/composer.ts";
 import { tickersComposer } from "../tickers/composer.ts";
-import type { TradenetRealtime } from "../tradernet/realtime.ts";
 import type { Bot, CustomContext } from "./types.ts";
 import { createReplyWithTextFunc } from "./utils.ts";
 
-function extendContext(
-  bot: Bot,
-  database: Database,
-  tradenetRealtime: TradenetRealtime,
-) {
+function extendContext(bot: Bot, database: Database) {
   bot.use(async (ctx, next) => {
     if (!ctx.chat || !ctx.from) {
       return;
@@ -20,7 +15,6 @@ function extendContext(
 
     ctx.text = createReplyWithTextFunc(ctx);
     ctx.db = database;
-    ctx.tradenetRealtime = tradenetRealtime;
 
     const user = await findOrCreateUser(database, ctx.from.id);
 
@@ -35,10 +29,7 @@ function setupComposers(bot: Bot) {
   bot.use(tickersComposer);
 }
 
-export function createBot(
-  database: Database,
-  tradenetRealtime: TradenetRealtime,
-): Bot {
+export function createBot(database: Database): Bot {
   const TOKEN = Deno.env.get("TOKEN");
   if (!TOKEN) {
     throw new Error("TOKEN environment variable is missing");
@@ -46,7 +37,7 @@ export function createBot(
 
   const bot = new TelegramBot<CustomContext>(TOKEN);
 
-  extendContext(bot, database, tradenetRealtime);
+  extendContext(bot, database);
   setupComposers(bot);
 
   return bot;

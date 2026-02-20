@@ -1,8 +1,13 @@
 import { Composer } from "grammy";
 import { formatMoneyChange } from "../../utils/money.ts";
 import type { CustomContext } from "../bot/types.ts";
-import { getPrices } from "../database/price.ts";
+import {
+  getPrices,
+  refreshPersistentPrice,
+  savePrice,
+} from "../database/price.ts";
 import { addPosition, getPositions } from "../database/user.ts";
+import { fetchTickerPrice } from "./price.ts";
 
 export const tickersComposer = new Composer<CustomContext>();
 
@@ -38,9 +43,8 @@ tickersComposer.command("buy", async (ctx) => {
     return;
   }
 
-  ctx.tradenetRealtime.subscribe(ticker);
-
   await ctx.text("bought");
+  await refreshPersistentPrice(ctx.db, ticker);
 });
 
 tickersComposer.command("tickers", async (ctx) => {
@@ -49,10 +53,14 @@ tickersComposer.command("tickers", async (ctx) => {
     return;
   }
 
-  const prices = await getPrices(
-    ctx.db,
-    ctx.dbEntities.user.positions.map((position) => position.ticker),
+  const tickers = ctx.dbEntities.user.positions.map(
+    (position) => position.ticker,
   );
+  for (const ticker of tickers) {
+    await refreshPersistentPrice(ctx.db, ticker);
+  }
+
+  const prices = await getPrices(ctx.db, tickers);
 
   const positions = getPositions(ctx.dbEntities.user);
   const now = new Date();

@@ -8,5 +8,6 @@
     "grammy": "https://deno.land/x/grammy/mod.ts",
     "grammy_types": "https://deno.land/x/grammy_types/mod.ts",
     "mongodb": "npm:mongodb@^6.18.0"
-  }
+  },
+  "unstable": ["cron"]
 }

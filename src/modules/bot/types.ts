@@ -2,7 +2,6 @@ import type { Api, Bot as TelegramBot, Context, NextFunction } from "grammy";
 import type { Message } from "grammy_types";
 import type { Database } from "../database/setup.ts";
 import type { User } from "../database/user.ts";
-import type { TradenetRealtime } from "../tradernet/realtime.ts";
 
 type Extra = Parameters<Api["sendMessage"]>[2];
 
@@ -18,7 +17,6 @@ export type Custom = {
   };
 
   db: Database;
-  tradenetRealtime: TradenetRealtime;
 };
 
 export type CustomContext = Context & Custom;
