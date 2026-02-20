@@ -9,45 +9,45 @@ import type { Bot, CustomContext } from "./types.ts";
 import { createReplyWithTextFunc } from "./utils.ts";
 
 function extendContext(
-	bot: Bot,
-	database: Database,
-	tradenetRealtime: TradenetRealtime,
+  bot: Bot,
+  database: Database,
+  tradenetRealtime: TradenetRealtime,
 ) {
-	bot.use(async (ctx, next) => {
-		if (!ctx.chat || !ctx.from) {
-			return;
-		}
+  bot.use(async (ctx, next) => {
+    if (!ctx.chat || !ctx.from) {
+      return;
+    }
 
-		ctx.text = createReplyWithTextFunc(ctx);
-		ctx.db = database;
-		ctx.tradenetRealtime = tradenetRealtime;
+    ctx.text = createReplyWithTextFunc(ctx);
+    ctx.db = database;
+    ctx.tradenetRealtime = tradenetRealtime;
 
-		const user = await findOrCreateUser(database, ctx.from.id);
+    const user = await findOrCreateUser(database, ctx.from.id);
 
-		ctx.dbEntities = { user };
+    ctx.dbEntities = { user };
 
-		await next();
-	});
+    await next();
+  });
 }
 
 function setupComposers(bot: Bot) {
-	bot.use(startComposer);
-	bot.use(tickersComposer);
+  bot.use(startComposer);
+  bot.use(tickersComposer);
 }
 
 export function createBot(
-	database: Database,
-	tradenetRealtime: TradenetRealtime,
+  database: Database,
+  tradenetRealtime: TradenetRealtime,
 ): Bot {
-	const TOKEN = Deno.env.get("TOKEN");
-	if (!TOKEN) {
-		throw new Error("TOKEN environment variable is missing");
-	}
+  const TOKEN = Deno.env.get("TOKEN");
+  if (!TOKEN) {
+    throw new Error("TOKEN environment variable is missing");
+  }
 
-	const bot = new TelegramBot<CustomContext>(TOKEN);
+  const bot = new TelegramBot<CustomContext>(TOKEN);
 
-	extendContext(bot, database, tradenetRealtime);
-	setupComposers(bot);
+  extendContext(bot, database, tradenetRealtime);
+  setupComposers(bot);
 
-	return bot;
+  return bot;
 }

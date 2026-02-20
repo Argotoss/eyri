@@ -7,18 +7,18 @@ import type { TradenetRealtime } from "../tradernet/realtime.ts";
 type Extra = Parameters<Api["sendMessage"]>[2];
 
 export type Custom = {
-	text: (
-		text: string,
-		templateData?: Record<string, string | number>,
-		extra?: Extra,
-	) => Promise<Message.TextMessage>;
+  text: (
+    text: string,
+    templateData?: Record<string, string | number>,
+    extra?: Extra,
+  ) => Promise<Message.TextMessage>;
 
-	dbEntities: {
-		user: User | null;
-	};
+  dbEntities: {
+    user: User | null;
+  };
 
-	db: Database;
-	tradenetRealtime: TradenetRealtime;
+  db: Database;
+  tradenetRealtime: TradenetRealtime;
 };
 
 export type CustomContext = Context & Custom;
