@@ -1,4 +1,4 @@
-import type { Api, Context, NextFunction, Bot as TelegramBot } from "grammy";
+import type { Api, Bot as TelegramBot, Context, NextFunction } from "grammy";
 import type { Message } from "grammy_types";
 import type { Database } from "../database/setup.ts";
 import type { User } from "../database/user.ts";
