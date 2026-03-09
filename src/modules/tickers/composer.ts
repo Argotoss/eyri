@@ -1,13 +1,8 @@
 import { Composer } from "grammy";
-import { formatMoneyChange } from "../../utils/money.ts";
 import type { CustomContext } from "../bot/types.ts";
-import {
-  getPrices,
-  refreshPersistentPrice,
-  savePrice,
-} from "../database/price.ts";
-import { addPosition, getPositions } from "../database/user.ts";
-import { fetchTickerPrice } from "./price.ts";
+import { refreshPersistentPrice } from "../database/price.ts";
+import { addPosition } from "../database/user.ts";
+import { buildTickerList, parsePriceOverrides } from "./portfolio.ts";
 
 export const tickersComposer = new Composer<CustomContext>();
 
@@ -53,72 +48,41 @@ tickersComposer.command("tickers", async (ctx) => {
     return;
   }
 
-  const tickers = ctx.dbEntities.user.positions.map(
-    (position) => position.ticker,
-  );
-  for (const ticker of tickers) {
-    await refreshPersistentPrice(ctx.db, ticker);
+  const priceList = await buildTickerList({
+    database: ctx.db,
+    user: ctx.dbEntities.user,
+  });
+
+  if (priceList.length === 0) {
+    await ctx.text("no_positions");
+    return;
   }
 
-  const prices = await getPrices(ctx.db, tickers);
+  await ctx.reply(priceList);
+});
 
-  const positions = getPositions(ctx.dbEntities.user);
-  const now = new Date();
-  const earliestDatesByTicker = ctx.dbEntities.user.positions.reduce(
-    (list, position) => {
-      const ticker = position.ticker;
-      const positionDate =
-        position.date instanceof Date ? position.date : new Date(position.date);
-      const previousDate = list[ticker];
-      if (!previousDate || positionDate < previousDate) {
-        list[ticker] = positionDate;
-      }
-      return list;
-    },
-    {} as Record<string, Date>,
-  );
+tickersComposer.command("when", async (ctx) => {
+  if (!ctx.dbEntities.user) {
+    await ctx.text("start");
+    return;
+  }
 
-  const getMonthCount = (startDate: Date, endDate: Date) => {
-    const monthDifference =
-      (endDate.getFullYear() - startDate.getFullYear()) * 12 +
-      (endDate.getMonth() - startDate.getMonth());
-    return Math.max(1, monthDifference + 1);
-  };
+  if (!ctx.match) {
+    await ctx.text("when");
+    return;
+  }
 
-  const formatMoney = (value: number) => `$${value.toFixed(2)}`;
-  const formatAmount = (value: number) => value.toFixed(2);
+  const priceOverrides = parsePriceOverrides(ctx.match);
+  if (!priceOverrides) {
+    await ctx.text("when");
+    return;
+  }
 
-  const priceList = Object.entries(positions)
-    .map(([ticker, { amount, cost }]) => {
-      const currentPrice = prices[ticker]?.price;
-      const oldestDate = earliestDatesByTicker[ticker];
-      const monthCount = oldestDate ? getMonthCount(oldestDate, now) : 1;
-      const totalInput = cost;
-      const averageUnitPrice = amount === 0 ? 0 : totalInput / amount;
-      if (!currentPrice) {
-        return [
-          `${ticker} ? ?`,
-          `${formatMoney(averageUnitPrice)} x ${formatAmount(amount)} (? ?)`,
-          `${formatMoney(totalInput)} ➔ ? x ${monthCount}m`,
-        ].join("\n");
-      }
-
-      const totalNow = amount * currentPrice;
-      const totalChange = totalNow - totalInput;
-      const totalPercentageChange =
-        totalInput === 0 ? 0 : (totalChange / totalInput) * 100;
-      const currentVsAveragePercentageChange =
-        averageUnitPrice === 0
-          ? 0
-          : ((currentPrice - averageUnitPrice) / averageUnitPrice) * 100;
-
-      return [
-        `${ticker} ${formatMoneyChange(totalChange)} ${formatMoneyChange(totalPercentageChange, "%")}`,
-        `${formatMoney(averageUnitPrice)} x ${formatAmount(amount)} (${formatMoney(currentPrice)} ${formatMoneyChange(currentVsAveragePercentageChange, "%")})`,
-        `${formatMoney(totalInput)} ➔ ${formatMoney(totalNow)} x ${monthCount}m`,
-      ].join("\n");
-    })
-    .join("\n");
+  const priceList = await buildTickerList({
+    database: ctx.db,
+    user: ctx.dbEntities.user,
+    priceOverrides,
+  });
 
   if (priceList.length === 0) {
     await ctx.text("no_positions");
