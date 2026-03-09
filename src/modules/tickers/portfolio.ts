@@ -80,6 +80,42 @@ export async function buildTickerList({
     .join("\n");
 }
 
+export function buildHistory(user: User) {
+	const sorted = [...user.positions].sort((posA, posB) => {
+		const dateA =
+			posA.date instanceof Date ? posA.date : new Date(posA.date);
+		const dateB =
+			posB.date instanceof Date ? posB.date : new Date(posB.date);
+		return dateA.getTime() - dateB.getTime();
+	});
+
+	const pad = (value: number) => String(value).padStart(2, "0");
+
+	const grouped = new Map<number, { lines: string[]; total: number }>();
+	for (const position of sorted) {
+		const date =
+			position.date instanceof Date
+				? position.date
+				: new Date(position.date);
+		const year = date.getFullYear();
+		const unitPrice = position.amount === 0 ? 0 : position.price / position.amount;
+		const line = `${pad(date.getDate())}.${pad(date.getMonth() + 1)} ${position.ticker} ${position.amount.toFixed(4)} x $${unitPrice.toFixed(2)} ($${position.price.toFixed(0)})`;
+		const group = grouped.get(year) ?? { lines: [], total: 0 };
+		group.lines.push(line);
+		group.total += position.price;
+		grouped.set(year, group);
+	}
+
+	let grandTotal = 0;
+	const sections = [...grouped.entries()].map(([year, { lines, total }]) => {
+		grandTotal += total;
+		return `${year} · $${total.toFixed(0)}\n${lines.join("\n")}`;
+	});
+
+	sections.push(`Total $${grandTotal.toFixed(0)}`);
+	return sections.join("\n\n");
+}
+
 export function parsePriceOverrides(
   input: string,
 ): Record<string, number> | null {

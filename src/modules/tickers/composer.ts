@@ -2,7 +2,11 @@ import { Composer } from "grammy";
 import type { CustomContext } from "../bot/types.ts";
 import { refreshPersistentPrice } from "../database/price.ts";
 import { addPosition } from "../database/user.ts";
-import { buildTickerList, parsePriceOverrides } from "./portfolio.ts";
+import {
+	buildHistory,
+	buildTickerList,
+	parsePriceOverrides,
+} from "./portfolio.ts";
 
 export const tickersComposer = new Composer<CustomContext>();
 
@@ -59,6 +63,22 @@ tickersComposer.command("tickers", async (ctx) => {
   }
 
   await ctx.reply(priceList);
+});
+
+tickersComposer.command("history", async (ctx) => {
+	if (!ctx.dbEntities.user) {
+		await ctx.text("start");
+		return;
+	}
+
+	const history = buildHistory(ctx.dbEntities.user);
+
+	if (history.length === 0) {
+		await ctx.text("no_positions");
+		return;
+	}
+
+	await ctx.reply(history);
 });
 
 tickersComposer.command("when", async (ctx) => {

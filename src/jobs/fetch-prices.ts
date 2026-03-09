@@ -1,5 +1,5 @@
 import { refreshPersistentPrice } from "../modules/database/price.ts";
-import { Database } from "../modules/database/setup.ts";
+import type { Database } from "../modules/database/setup.ts";
 import { getAllUsers, getPositions } from "../modules/database/user.ts";
 
 export async function refetchPrices(database: Database) {
