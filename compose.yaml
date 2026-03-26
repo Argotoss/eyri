@@ -1,0 +1,29 @@
+services:
+  eyri_db:
+    image: docker.io/library/mongo:7
+    restart: unless-stopped
+    volumes:
+      - eyri-mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand({ ping: 1 })"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  eyri_app:
+    build:
+      context: .
+      dockerfile: Containerfile
+    restart: unless-stopped
+    depends_on:
+      eyri_db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DB_CONNECTION_STRING: mongodb://eyri_db:27017/eyri
+    init: true
+
+volumes:
+  eyri-mongo-data:
