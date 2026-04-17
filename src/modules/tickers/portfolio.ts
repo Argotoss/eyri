@@ -66,14 +66,11 @@ export async function buildTickerList({
       const totalChange = totalNow - totalInput;
       const totalPercentageChange =
         totalInput === 0 ? 0 : (totalChange / totalInput) * 100;
-      const currentVsAveragePercentageChange =
-        averageUnitPrice === 0
-          ? 0
-          : ((currentPrice - averageUnitPrice) / averageUnitPrice) * 100;
+      const currentVsAverageChange = currentPrice - averageUnitPrice;
 
       return [
         `${ticker} ${formatMoneyChange(totalChange)} ${formatMoneyChange(totalPercentageChange, "%")}`,
-        `${formatMoney(averageUnitPrice)} x ${formatAmount(amount)} (${formatMoney(currentPrice)} ${formatMoneyChange(currentVsAveragePercentageChange, "%")})`,
+        `${formatMoney(averageUnitPrice)} x ${formatAmount(amount)} (${formatMoney(currentPrice)} ${formatMoneyChange(currentVsAverageChange)})`,
         `${formatMoney(totalInput)} ➔ ${formatMoney(totalNow)} x ${monthCount}m`,
       ].join("\n");
     })
