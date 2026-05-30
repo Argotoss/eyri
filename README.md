@@ -1,7 +1,7 @@
 # Stock Manager for Telegram
 
 ## Stack
-- Stooq API
+- Interactive Brokers Gateway API
+- gnzsnz/ib-gateway
 - TypeScript
 - grammY
-- MongoDB

@@ -1,29 +1,47 @@
 services:
-  eyri_db:
-    image: docker.io/library/mongo:7
-    restart: unless-stopped
-    volumes:
-      - eyri-mongo-data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand({ ping: 1 })"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+    ib_gateway:
+        image: docker.io/gnzsnz/ib-gateway:10.34.1a@sha256:d1779edb24f50ca44d4bd20d4098ffd5b2b81ca98cf21e6676ed465befb7dd44
+        restart: unless-stopped
+        env_file:
+            - .env
+        environment:
+            TRADING_MODE: ${TRADING_MODE:-paper}
+            TWS_USERID: ${TWS_USERID}
+            TWS_PASSWORD: ${TWS_PASSWORD}
+            TWS_ACCEPT_INCOMING: ${TWS_ACCEPT_INCOMING:-accept}
+            READ_ONLY_API: ${READ_ONLY_API:-yes}
+            TIME_ZONE: ${TIME_ZONE:-Etc/UTC}
+            TZ: ${TIME_ZONE:-Etc/UTC}
+            TWS_SETTINGS_PATH: /home/ibgateway/Jts
+            TWOFA_TIMEOUT_ACTION: ${TWOFA_TIMEOUT_ACTION:-restart}
+            RELOGIN_AFTER_TWOFA_TIMEOUT: ${RELOGIN_AFTER_TWOFA_TIMEOUT:-yes}
+            TWOFA_EXIT_INTERVAL: ${TWOFA_EXIT_INTERVAL:-60}
+            VNC_SERVER_PASSWORD: ${VNC_SERVER_PASSWORD:-}
+        ports:
+            - "127.0.0.1:4001:4003"
+            - "127.0.0.1:4002:4004"
+            - "127.0.0.1:5900:5900"
+        volumes:
+            - ib-gateway-settings:/home/ibgateway/Jts
 
-  eyri_app:
-    build:
-      context: .
-      dockerfile: Containerfile
-    restart: unless-stopped
-    depends_on:
-      eyri_db:
-        condition: service_healthy
-    env_file:
-      - .env
-    environment:
-      DB_CONNECTION_STRING: mongodb://eyri_db:27017/eyri
-    init: true
+    eyri_app:
+        build:
+            context: .
+            dockerfile: Containerfile
+        restart: unless-stopped
+        depends_on:
+            - ib_gateway
+        env_file:
+            - .env
+        environment:
+            IBKR_HOST: ib_gateway
+            IBKR_PORT: "${IBKR_PORT:-}"
+            IBKR_CLIENT_ID: ${IBKR_CLIENT_ID:-0}
+            IBKR_ACCOUNT_ID: "${IBKR_ACCOUNT_ID:-}"
+        init: true
+        volumes:
+            - eyri-data:/app/data
 
 volumes:
-  eyri-mongo-data:
+    ib-gateway-settings:
+    eyri-data:
