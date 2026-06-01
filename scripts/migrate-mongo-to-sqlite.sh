@@ -15,6 +15,9 @@ COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(basename "$ROOT_DIR")}"
 MONGO_DB="${MONGO_DB:-eyri}"
 MONGO_CONTAINER="${MONGO_CONTAINER:-${1:-}}"
 MONGO_VOLUME="${MONGO_VOLUME:-}"
+APP_CONTAINER="${APP_CONTAINER:-}"
+APP_SERVICE="${APP_SERVICE:-eyri_app}"
+SQLITE_CONTAINER_PATH="${SQLITE_CONTAINER_PATH:-/app/data/eyri.sqlite}"
 MONGO_IMAGE="${MONGO_IMAGE:-docker.io/library/mongo:7}"
 DENO_IMAGE="${DENO_IMAGE:-docker.io/denoland/deno:2.5.4}"
 CREATED_MONGO_CONTAINER=""
@@ -47,12 +50,24 @@ if ! command -v "$CONTAINER_RUNTIME" >/dev/null 2>&1; then
   exit 1
 fi
 
+TMP_DIR="$(mktemp -d)"
+
 volume_exists() {
   "$CONTAINER_RUNTIME" volume inspect "$1" >/dev/null 2>&1
 }
 
 volume_mountpoint() {
   "$CONTAINER_RUNTIME" volume inspect "$1" --format '{{.Mountpoint}}'
+}
+
+container_exists() {
+  "$CONTAINER_RUNTIME" inspect "$1" >/dev/null 2>&1
+}
+
+container_is_running() {
+  local container="$1"
+
+  [[ "$("$CONTAINER_RUNTIME" inspect "$container" --format '{{.State.Running}}' 2>/dev/null || true)" == "true" ]]
 }
 
 find_old_mongo_volume() {
@@ -72,6 +87,35 @@ find_old_mongo_volume() {
 
   "$CONTAINER_RUNTIME" volume ls --format '{{.Name}}' \
     | grep -E '(^|_)eyri-mongo-data$' \
+    | head -n 1 || true
+}
+
+find_app_container() {
+  local container
+
+  if "$CONTAINER_RUNTIME" compose version >/dev/null 2>&1; then
+    container="$(
+      "$CONTAINER_RUNTIME" compose ps -aq "$APP_SERVICE" 2>/dev/null \
+        | head -n 1 || true
+    )"
+    if [[ -n "$container" ]]; then
+      printf '%s\n' "$container"
+      return
+    fi
+  fi
+
+  container="$(
+    "$CONTAINER_RUNTIME" ps -a --format '{{.Names}}' \
+      | grep -E '(^|[-_])eyri_app($|[-_])' \
+      | head -n 1 || true
+  )"
+  if [[ -n "$container" ]]; then
+    printf '%s\n' "$container"
+    return
+  fi
+
+  "$CONTAINER_RUNTIME" ps -a --format '{{.Names}}' \
+    | grep -Ei 'eyri.*app|app.*eyri' \
     | head -n 1 || true
 }
 
@@ -102,8 +146,30 @@ find_sqlite_path() {
   printf '%s/data/eyri.sqlite\n' "$ROOT_DIR"
 }
 
-SQLITE_ABS_PATH="$(find_sqlite_path)"
-SQLITE_PATH="${EYRI_DATABASE_PATH:-$SQLITE_ABS_PATH}"
+copy_sqlite_from_app_container() {
+  local output_path="$1"
+
+  mkdir -p "$(dirname "$output_path")"
+  if [[ -n "$APP_CONTAINER" ]] && container_exists "$APP_CONTAINER"; then
+    "$CONTAINER_RUNTIME" cp \
+      "$APP_CONTAINER:$SQLITE_CONTAINER_PATH" \
+      "$output_path" 2>/dev/null || true
+  fi
+}
+
+copy_sqlite_to_app_container() {
+  local input_path="$1"
+
+  if [[ -z "$APP_CONTAINER" ]]; then
+    return
+  fi
+
+  echo "Copying migrated SQLite database into app container '$APP_CONTAINER:$SQLITE_CONTAINER_PATH'..."
+  "$CONTAINER_RUNTIME" cp "$input_path" "$APP_CONTAINER:$SQLITE_CONTAINER_PATH"
+}
+
+SQLITE_ABS_PATH=""
+SQLITE_PATH=""
 
 if [[ -z "$MONGO_CONTAINER" && -z "$MONGO_VOLUME" ]]; then
   MONGO_CONTAINER="$(find_mongo_container)"
@@ -113,7 +179,21 @@ if [[ -z "$MONGO_CONTAINER" && -z "$MONGO_VOLUME" ]]; then
   MONGO_VOLUME="$(find_old_mongo_volume)"
 fi
 
-TMP_DIR="$(mktemp -d)"
+if [[ -z "$APP_CONTAINER" ]]; then
+  APP_CONTAINER="$(find_app_container)"
+fi
+
+if [[ -n "$APP_CONTAINER" ]] && container_exists "$APP_CONTAINER"; then
+  SQLITE_ABS_PATH="$TMP_DIR/eyri.sqlite"
+  SQLITE_PATH="$APP_CONTAINER:$SQLITE_CONTAINER_PATH"
+  if container_is_running "$APP_CONTAINER"; then
+    echo "App container '$APP_CONTAINER' is running; restart it after migration so it reopens the SQLite file."
+  fi
+else
+  SQLITE_ABS_PATH="$(find_sqlite_path)"
+  SQLITE_PATH="${EYRI_DATABASE_PATH:-$SQLITE_ABS_PATH}"
+fi
+
 cleanup() {
   if [[ -n "$CREATED_MONGO_CONTAINER" ]]; then
     "$CONTAINER_RUNTIME" rm -f "$CREATED_MONGO_CONTAINER" >/dev/null 2>&1 || true
@@ -121,12 +201,6 @@ cleanup() {
   rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
-
-container_is_running() {
-  local container="$1"
-
-  [[ "$("$CONTAINER_RUNTIME" inspect "$container" --format '{{.State.Running}}' 2>/dev/null || true)" == "true" ]]
-}
 
 wait_for_mongo() {
   local container="$1"
@@ -200,6 +274,7 @@ dump_collection user "$TMP_DIR/users.json"
 dump_collection price "$TMP_DIR/prices.json"
 
 mkdir -p "$(dirname "$SQLITE_ABS_PATH")"
+copy_sqlite_from_app_container "$SQLITE_ABS_PATH"
 
 echo "Loading dump into SQLite database '$SQLITE_PATH'..."
 if command -v deno >/dev/null 2>&1; then
@@ -211,19 +286,36 @@ if command -v deno >/dev/null 2>&1; then
       --prices="$TMP_DIR/prices.json"
   )
 else
-  SQLITE_DIR="$(dirname "$SQLITE_ABS_PATH")"
-  SQLITE_FILE="$(basename "$SQLITE_ABS_PATH")"
+  if [[ "$SQLITE_PATH" == "$APP_CONTAINER:$SQLITE_CONTAINER_PATH" ]]; then
+    "$CONTAINER_RUNTIME" run --rm \
+      -v "$ROOT_DIR:/app:ro${BIND_MOUNT_SUFFIX}" \
+      -v "$TMP_DIR:/dump:ro${BIND_MOUNT_SUFFIX}" \
+      -v "$TMP_DIR:/sqlite${BIND_MOUNT_SUFFIX}" \
+      -w /app \
+      -e "EYRI_DATABASE_PATH=/sqlite/eyri.sqlite" \
+      "$DENO_IMAGE" \
+      run -A scripts/load-mongo-json-to-sqlite.ts \
+        --users=/dump/users.json \
+        --prices=/dump/prices.json
+  else
+    SQLITE_DIR="$(dirname "$SQLITE_ABS_PATH")"
+    SQLITE_FILE="$(basename "$SQLITE_ABS_PATH")"
 
-  "$CONTAINER_RUNTIME" run --rm \
-    -v "$ROOT_DIR:/app:ro${BIND_MOUNT_SUFFIX}" \
-    -v "$TMP_DIR:/dump:ro${BIND_MOUNT_SUFFIX}" \
-    -v "$SQLITE_DIR:/sqlite${BIND_MOUNT_SUFFIX}" \
-    -w /app \
-    -e "EYRI_DATABASE_PATH=/sqlite/$SQLITE_FILE" \
-    "$DENO_IMAGE" \
-    run -A scripts/load-mongo-json-to-sqlite.ts \
-      --users=/dump/users.json \
-      --prices=/dump/prices.json
+    "$CONTAINER_RUNTIME" run --rm \
+      -v "$ROOT_DIR:/app:ro${BIND_MOUNT_SUFFIX}" \
+      -v "$TMP_DIR:/dump:ro${BIND_MOUNT_SUFFIX}" \
+      -v "$SQLITE_DIR:/sqlite${BIND_MOUNT_SUFFIX}" \
+      -w /app \
+      -e "EYRI_DATABASE_PATH=/sqlite/$SQLITE_FILE" \
+      "$DENO_IMAGE" \
+      run -A scripts/load-mongo-json-to-sqlite.ts \
+        --users=/dump/users.json \
+        --prices=/dump/prices.json
+  fi
+fi
+
+if [[ "$SQLITE_PATH" == "$APP_CONTAINER:$SQLITE_CONTAINER_PATH" ]]; then
+  copy_sqlite_to_app_container "$SQLITE_ABS_PATH"
 fi
 
 echo "Migration complete."
