@@ -1,7 +1,7 @@
 export const locales: Record<string, Record<string, string>> = {
   en: {
     start:
-      `Eyri (Icelandic "penny") manages your investment performance.\n\nUse /buy to add a position purchase item.\nUse /tickers to see your positions performance.\nUse /history to see your purchase history.`,
+      `Eyri (Icelandic "penny") manages your investment performance.\n\nUse /buy to add a position purchase item.\nUse /tickers to see your positions performance.\nUse /perf to see concise performance.\nUse /history to see your purchase history.`,
     buy:
       `To add a position purchase item, use this format:\n\n<code>/buy [ticker] [price] [commission] [amount]</code>`,
     bought:

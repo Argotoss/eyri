@@ -14,6 +14,7 @@ import {
 } from "./decorations.ts";
 import {
   buildHistory,
+  buildPerformanceList,
   buildTickerList,
   parsePriceOverrides,
 } from "./portfolio.ts";
@@ -111,6 +112,29 @@ tickersComposer.command("tickers", async (ctx) => {
   }
 
   await ctx.reply(priceList, { parse_mode: "HTML" });
+});
+
+tickersComposer.command("perf", async (ctx) => {
+  if (!ctx.dbEntities.user || !ctx.from) {
+    await ctx.text("start");
+    return;
+  }
+
+  const tickerDecorations = await readTickerDecorations(ctx.from.id);
+  const tickerLabelPreferences = await readTickerLabelPreferences(ctx.from.id);
+  const performanceList = await buildPerformanceList({
+    database: ctx.db,
+    user: ctx.dbEntities.user,
+    tickerDecorations,
+    tickerLabelPreferences,
+  });
+
+  if (performanceList.length === 0) {
+    await ctx.text("no_positions");
+    return;
+  }
+
+  await ctx.reply(performanceList, { parse_mode: "HTML" });
 });
 
 tickersComposer.command("history", async (ctx) => {
