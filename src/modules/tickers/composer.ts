@@ -1,67 +1,59 @@
 import { Composer } from "grammy";
 import type { CustomContext } from "../bot/types.ts";
-import { fetchPortfolioPositions } from "../ibkr/client.ts";
-import { fetchFlexTrades } from "../ibkr/flex.ts";
+import { refreshPersistentPrice } from "../database/price.ts";
+import { addPosition } from "../database/user.ts";
 import {
   escapeHtml,
   formatTickerDecorations,
   parseDecorateCommand,
   parseLabelCommand,
-  readTickerLabelPreferences,
   readTickerDecorations,
+  readTickerLabelPreferences,
   setTickerDecoration,
   setTickerLabelPreference,
 } from "./decorations.ts";
 import {
-  buildPerformanceList,
+  buildHistory,
   buildTickerList,
-  buildTradeHistory,
   parsePriceOverrides,
 } from "./portfolio.ts";
 
 export const tickersComposer = new Composer<CustomContext>();
 
-async function getPositionsOrReply(ctx: CustomContext) {
-  try {
-    return await fetchPortfolioPositions();
-  } catch (error) {
-    console.error("Failed to fetch IBKR portfolio:", error);
-    await ctx.text("ibkr_unavailable");
-    return null;
-  }
-}
-
-async function replyTextChunks(
-  ctx: CustomContext,
-  text: string,
-  extra?: Parameters<CustomContext["reply"]>[1],
-) {
-  const chunks: string[] = [];
-  let chunk = "";
-  for (const line of text.split("\n")) {
-    const nextChunk = chunk ? `${chunk}\n${line}` : line;
-    if (nextChunk.length <= 3900) {
-      chunk = nextChunk;
-      continue;
-    }
-
-    if (chunk) {
-      chunks.push(chunk);
-    }
-    chunk = line;
-  }
-
-  if (chunk) {
-    chunks.push(chunk);
-  }
-
-  for (const chunk of chunks) {
-    await ctx.reply(chunk, extra);
-  }
-}
-
 tickersComposer.command("buy", async (ctx) => {
-  await ctx.text("buy_unsupported");
+  if (!ctx.dbEntities.user) {
+    await ctx.text("start");
+    return;
+  }
+
+  if (!ctx.match) {
+    await ctx.text("buy");
+    return;
+  }
+
+  const params = ctx.match.split(" ");
+  if (params.length !== 4) {
+    await ctx.text("buy");
+    return;
+  }
+
+  const [ticker, price, commission, amount] = params;
+
+  const result = await addPosition({
+    database: ctx.db,
+    userId: ctx.dbEntities.user.userId,
+    ticker,
+    price: Number(price) + Number(commission),
+    amount: Number(amount),
+  });
+
+  if (!result.success) {
+    await ctx.text("buy");
+    return;
+  }
+
+  await ctx.text("bought");
+  await refreshPersistentPrice(ctx.db, ticker);
 });
 
 tickersComposer.command("decorate", async (ctx) => {
@@ -95,16 +87,16 @@ tickersComposer.command("label", async (ctx) => {
 });
 
 tickersComposer.command("tickers", async (ctx) => {
-  const positions = await getPositionsOrReply(ctx);
-  const userId = ctx.from?.id;
-  if (!positions || !userId) {
+  if (!ctx.dbEntities.user || !ctx.from) {
+    await ctx.text("start");
     return;
   }
 
-  const tickerDecorations = await readTickerDecorations(userId);
-  const tickerLabelPreferences = await readTickerLabelPreferences(userId);
+  const tickerDecorations = await readTickerDecorations(ctx.from.id);
+  const tickerLabelPreferences = await readTickerLabelPreferences(ctx.from.id);
   const priceList = await buildTickerList({
-    positions,
+    database: ctx.db,
+    user: ctx.dbEntities.user,
     tickerDecorations,
     tickerLabelPreferences,
   });
@@ -117,65 +109,34 @@ tickersComposer.command("tickers", async (ctx) => {
   await ctx.reply(priceList, { parse_mode: "HTML" });
 });
 
-tickersComposer.command("perf", async (ctx) => {
-  const positions = await getPositionsOrReply(ctx);
-  const userId = ctx.from?.id;
-  if (!positions || !userId) {
+tickersComposer.command("history", async (ctx) => {
+  if (!ctx.dbEntities.user || !ctx.from) {
+    await ctx.text("start");
     return;
   }
 
-  const tickerDecorations = await readTickerDecorations(userId);
-  const tickerLabelPreferences = await readTickerLabelPreferences(userId);
-  const performanceList = await buildPerformanceList({
-    positions,
+  const tickerDecorations = await readTickerDecorations(ctx.from.id);
+  const tickerLabelPreferences = await readTickerLabelPreferences(ctx.from.id);
+  const history = buildHistory({
+    user: ctx.dbEntities.user,
     tickerDecorations,
     tickerLabelPreferences,
   });
 
-  if (performanceList.length === 0) {
+  if (history.length === 0) {
     await ctx.text("no_positions");
     return;
   }
 
-  await ctx.reply(performanceList, { parse_mode: "HTML" });
-});
-
-tickersComposer.command("history", async (ctx) => {
-  const userId = ctx.from?.id;
-  if (!userId) {
-    return;
-  }
-
-  const trades = await fetchFlexTrades().catch((error) => {
-    console.error("Failed to fetch IBKR Flex trade history:", error);
-    return null;
-  });
-  if (!trades) {
-    await ctx.text("history_unavailable");
-    return;
-  }
-
-  if (trades.length === 0) {
-    await ctx.text("no_trades");
-    return;
-  }
-
-  const tickerDecorations = await readTickerDecorations(userId);
-  const tickerLabelPreferences = await readTickerLabelPreferences(userId);
-  const history = buildTradeHistory({
-    trades,
-    tickerDecorations,
-    tickerLabelPreferences,
-  });
-  if (history.length === 0) {
-    await ctx.text("no_trades");
-    return;
-  }
-
-  await replyTextChunks(ctx, history, { parse_mode: "HTML" });
+  await ctx.reply(history, { parse_mode: "HTML" });
 });
 
 tickersComposer.command("when", async (ctx) => {
+  if (!ctx.dbEntities.user || !ctx.from) {
+    await ctx.text("start");
+    return;
+  }
+
   if (!ctx.match) {
     await ctx.text("when");
     return;
@@ -187,16 +148,11 @@ tickersComposer.command("when", async (ctx) => {
     return;
   }
 
-  const positions = await getPositionsOrReply(ctx);
-  const userId = ctx.from?.id;
-  if (!positions || !userId) {
-    return;
-  }
-
-  const tickerDecorations = await readTickerDecorations(userId);
-  const tickerLabelPreferences = await readTickerLabelPreferences(userId);
+  const tickerDecorations = await readTickerDecorations(ctx.from.id);
+  const tickerLabelPreferences = await readTickerLabelPreferences(ctx.from.id);
   const priceList = await buildTickerList({
-    positions,
+    database: ctx.db,
+    user: ctx.dbEntities.user,
     priceOverrides,
     tickerDecorations,
     tickerLabelPreferences,

@@ -1,5 +1,7 @@
 import type { Api, Bot as TelegramBot, Context, NextFunction } from "grammy";
 import type { Message } from "grammy_types";
+import type { Database } from "../database/setup.ts";
+import type { User } from "../database/user.ts";
 
 type Extra = Parameters<Api["sendMessage"]>[2];
 
@@ -9,6 +11,12 @@ export type Custom = {
     templateData?: Record<string, string | number>,
     extra?: Extra,
   ) => Promise<Message.TextMessage>;
+
+  dbEntities: {
+    user: User | null;
+  };
+
+  db: Database;
 };
 
 export type CustomContext = Context & Custom;

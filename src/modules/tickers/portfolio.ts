@@ -1,6 +1,7 @@
 import { formatMoneyChange } from "../../utils/money.ts";
-import type { PortfolioPosition } from "../ibkr/client.ts";
-import type { FlexTrade } from "../ibkr/flex.ts";
+import { getPrices, refreshPersistentPrice } from "../database/price.ts";
+import type { Database } from "../database/setup.ts";
+import { getPositions, type User } from "../database/user.ts";
 import {
   formatDecoratedTicker,
   type TickerDecorations,
@@ -8,304 +9,201 @@ import {
 } from "./decorations.ts";
 
 type BuildTickerListArgs = {
-  positions: PortfolioPosition[];
+  database: Database;
+  user: User;
   priceOverrides?: Record<string, number>;
   tickerDecorations?: TickerDecorations;
   tickerLabelPreferences?: TickerLabelPreferences;
 };
 
-type BuildTradeHistoryArgs = {
-  trades: FlexTrade[];
+type BuildHistoryArgs = {
+  user: User;
   tickerDecorations?: TickerDecorations;
   tickerLabelPreferences?: TickerLabelPreferences;
 };
 
-type PositionPerformance = {
-  position: PortfolioPosition;
-  currentPrice: number | null;
-  averageUnitPrice: number | null;
-  totalInput: number | null;
-  totalNow: number | null;
-  totalChange: number | null;
-  totalPercentageChange: number | null;
-  currentVsAverageChange: number | null;
-  monthCount: number | null;
-  monthlyChange: number | null;
-  monthlyPercentageChange: number | null;
-};
-
-const formatMoney = (value: number, currency = "USD") =>
-  currency === "USD"
-    ? `$${value.toFixed(2)}`
-    : `${value.toFixed(2)} ${currency}`;
-const formatWholeMoney = (value: number, currency = "USD") =>
-  currency === "USD"
-    ? `$${value.toFixed(0)}`
-    : `${value.toFixed(0)} ${currency}`;
+const formatMoney = (value: number) => `$${value.toFixed(2)}`;
 const formatAmount = (value: number) => value.toFixed(2);
 
 function getMonthCount(startDate: Date, endDate: Date) {
   const monthDifference =
-    (endDate.getUTCFullYear() - startDate.getUTCFullYear()) * 12 +
-    (endDate.getUTCMonth() - startDate.getUTCMonth());
+    (endDate.getFullYear() - startDate.getFullYear()) * 12 +
+    (endDate.getMonth() - startDate.getMonth());
   return Math.max(1, monthDifference + 1);
 }
 
-function getSortedPositions(positions: PortfolioPosition[]) {
-  return [...positions].sort((positionA, positionB) => {
-    const totalInputA = positionA.totalInput ?? 0;
-    const totalInputB = positionB.totalInput ?? 0;
-    return totalInputB - totalInputA;
-  });
+function toDate(value: Date | string) {
+  return value instanceof Date ? value : new Date(value);
 }
 
-function buildPositionPerformance(
-  position: PortfolioPosition,
-  now: Date,
-  priceOverrides?: Record<string, number>,
-): PositionPerformance {
-  const currentPrice =
-    priceOverrides?.[position.ticker] ?? position.currentPrice;
-  const totalInput = position.totalInput;
-  const averageUnitPrice = position.averageUnitPrice;
-  const monthCount = position.openedAt
-    ? getMonthCount(position.openedAt, now)
-    : null;
-
-  if (
-    currentPrice === undefined ||
-    currentPrice === null ||
-    totalInput === null ||
-    averageUnitPrice === null
-  ) {
-    return {
-      position,
-      currentPrice: null,
-      averageUnitPrice,
-      totalInput,
-      totalNow: null,
-      totalChange: null,
-      totalPercentageChange: null,
-      currentVsAverageChange: null,
-      monthCount,
-      monthlyChange: null,
-      monthlyPercentageChange: null,
-    };
+export async function buildTickerList({
+  database,
+  user,
+  priceOverrides,
+  tickerDecorations,
+  tickerLabelPreferences,
+}: BuildTickerListArgs) {
+  if (user.positions.length === 0) {
+    return "";
   }
 
-  const totalNow = position.amount * currentPrice;
-  const totalChange = totalNow - totalInput;
-  const totalPercentageChange =
-    totalInput === 0 ? 0 : (totalChange / totalInput) * 100;
+  const tickers = user.positions.map((position) => position.ticker);
+  await Promise.all(
+    [...new Set(tickers)].map((ticker) =>
+      refreshPersistentPrice(database, ticker),
+    ),
+  );
 
-  return {
-    position,
-    currentPrice,
-    averageUnitPrice,
-    totalInput,
-    totalNow,
-    totalChange,
-    totalPercentageChange,
-    currentVsAverageChange: currentPrice - averageUnitPrice,
-    monthCount,
-    monthlyChange: monthCount ? totalChange / monthCount : null,
-    monthlyPercentageChange: monthCount
-      ? totalPercentageChange / monthCount
-      : null,
-  };
-}
-
-function buildPortfolioTotals(performances: PositionPerformance[], now: Date) {
-  const earliestPortfolioDate = performances.reduce(
-    (earliest, { position }) =>
-      !position.openedAt
-        ? earliest
-        : !earliest || position.openedAt < earliest
-          ? position.openedAt
-          : earliest,
+  const prices = await getPrices(database, tickers);
+  const positions = getPositions(user);
+  const now = new Date();
+  const earliestDatesByTicker = user.positions.reduce(
+    (list, position) => {
+      const ticker = position.ticker;
+      const positionDate = toDate(position.date);
+      const previousDate = list[ticker];
+      if (!previousDate || positionDate < previousDate) {
+        list[ticker] = positionDate;
+      }
+      return list;
+    },
+    {} as Record<string, Date>,
+  );
+  const earliestPortfolioDate = Object.values(earliestDatesByTicker).reduce(
+    (earliest, date) => (!earliest || date < earliest ? date : earliest),
     null as Date | null,
   );
-  const monthCount = earliestPortfolioDate
-    ? getMonthCount(earliestPortfolioDate, now)
-    : null;
 
-  const totals = performances.reduce(
-    (totals, performance) => {
-      if (performance.totalInput !== null) {
-        totals.totalInput += performance.totalInput;
+  const tickerLines = Object.entries(positions).map(
+    ([ticker, { amount, cost }]) => {
+      const tickerName = formatDecoratedTicker(
+        ticker,
+        tickerDecorations,
+        tickerLabelPreferences,
+      );
+      const currentPrice = priceOverrides?.[ticker] ?? prices[ticker]?.price;
+      const oldestDate = earliestDatesByTicker[ticker];
+      const monthCount = oldestDate ? getMonthCount(oldestDate, now) : 1;
+      const totalInput = cost;
+      const averageUnitPrice = amount === 0 ? 0 : totalInput / amount;
+      if (currentPrice === undefined || currentPrice === null) {
+        return [
+          `${tickerName} ? ?`,
+          `${formatMoney(averageUnitPrice)} x ${formatAmount(amount)} (? ?)`,
+          `${formatMoney(totalInput)} -> ? x ${monthCount}m`,
+        ].join("\n");
       }
-      if (
-        performance.totalInput === null ||
-        performance.totalNow === null ||
-        performance.totalChange === null
-      ) {
+
+      const totalNow = amount * currentPrice;
+      const totalChange = totalNow - totalInput;
+      const totalPercentageChange =
+        totalInput === 0 ? 0 : (totalChange / totalInput) * 100;
+      const currentVsAverageChange = currentPrice - averageUnitPrice;
+
+      return [
+        `${tickerName} ${formatMoneyChange(totalChange)} ${formatMoneyChange(
+          totalPercentageChange,
+          "%",
+        )}`,
+        `${formatMoney(averageUnitPrice)} x ${formatAmount(amount)} (${formatMoney(
+          currentPrice,
+        )} ${formatMoneyChange(currentVsAverageChange)})`,
+        `${formatMoney(totalInput)} -> ${formatMoney(
+          totalNow,
+        )} x ${monthCount}m`,
+      ].join("\n");
+    },
+  );
+
+  const portfolioMonthCount = earliestPortfolioDate
+    ? getMonthCount(earliestPortfolioDate, now)
+    : 1;
+  const portfolioTotals = Object.entries(positions).reduce(
+    (totals, [ticker, { amount, cost }]) => {
+      const currentPrice = priceOverrides?.[ticker] ?? prices[ticker]?.price;
+      totals.totalInput += cost;
+      if (currentPrice === undefined || currentPrice === null) {
         totals.hasMissingPrice = true;
         return totals;
       }
 
-      totals.totalNow += performance.totalNow;
+      totals.totalNow += amount * currentPrice;
       return totals;
     },
     { totalInput: 0, totalNow: 0, hasMissingPrice: false },
   );
 
-  const hasMissingOpenDate = performances.some(
-    ({ position }) => !position.openedAt,
-  );
-  if (totals.hasMissingPrice) {
-    return {
-      ...totals,
-      totalChange: null,
-      totalPercentageChange: null,
-      monthCount,
-      monthlyChange: null,
-      monthlyPercentageChange: null,
-      hasMissingOpenDate,
-    };
-  }
-
-  const totalChange = totals.totalNow - totals.totalInput;
-  const totalPercentageChange =
-    totals.totalInput === 0 ? 0 : (totalChange / totals.totalInput) * 100;
-
-  return {
-    ...totals,
-    totalChange,
-    totalPercentageChange,
-    monthCount,
-    monthlyChange: monthCount ? totalChange / monthCount : null,
-    monthlyPercentageChange: monthCount
-      ? totalPercentageChange / monthCount
-      : null,
-    hasMissingOpenDate,
-  };
-}
-
-export async function buildTickerList({
-  positions,
-  priceOverrides,
-  tickerDecorations,
-  tickerLabelPreferences,
-}: BuildTickerListArgs) {
-  const now = new Date();
-  const performances = getSortedPositions(positions).map((position) =>
-    buildPositionPerformance(position, now, priceOverrides),
-  );
-
-  const tickerLines = performances.map((performance) => {
-    const { position } = performance;
-    const tickerName = formatDecoratedTicker(
-      position.ticker,
-      tickerDecorations,
-      tickerLabelPreferences,
-    );
-    if (
-      performance.currentPrice === null ||
-      performance.totalInput === null ||
-      performance.totalChange === null ||
-      performance.totalPercentageChange === null ||
-      performance.averageUnitPrice === null ||
-      performance.totalNow === null ||
-      performance.currentVsAverageChange === null
-    ) {
-      return [
-        `${tickerName} ? ?`,
-        `? x ${formatAmount(position.amount)} (? ?)`,
-        `? -> ? x ${performance.monthCount ?? "?"}m`,
-      ].join("\n");
-    }
-
-    return [
-      `${tickerName} ${formatMoneyChange(performance.totalChange)} ${formatMoneyChange(
-        performance.totalPercentageChange,
-        "%",
-      )}`,
-      `${formatMoney(performance.averageUnitPrice, position.currency)} x ${formatAmount(
-        position.amount,
-      )} (${formatMoney(performance.currentPrice, position.currency)} ${formatMoneyChange(
-        performance.currentVsAverageChange,
-      )})`,
-      `${formatMoney(performance.totalInput, position.currency)} -> ${formatMoney(
-        performance.totalNow,
-        position.currency,
-      )} x ${performance.monthCount ?? "?"}m${
-        performance.monthlyChange === null ||
-        performance.monthlyPercentageChange === null
-          ? ""
-          : ` (${formatMoneyChange(performance.monthlyChange)} ${formatMoneyChange(
-              performance.monthlyPercentageChange,
-              "%",
-            )}/m)`
-      }`,
-    ].join("\n");
-  });
-
-  const portfolioTotals = buildPortfolioTotals(performances, now);
-  const totalSummary =
-    portfolioTotals.hasMissingPrice ||
-    portfolioTotals.totalChange === null ||
-    portfolioTotals.totalPercentageChange === null
-      ? "? ? / ? ?"
-      : `${formatMoneyChange(portfolioTotals.totalChange)} ${formatMoneyChange(
-          portfolioTotals.totalPercentageChange,
+  const totalSummary = portfolioTotals.hasMissingPrice
+    ? "? ? / ? ?"
+    : (() => {
+        const totalChange =
+          portfolioTotals.totalNow - portfolioTotals.totalInput;
+        const totalPercentageChange =
+          portfolioTotals.totalInput === 0
+            ? 0
+            : (totalChange / portfolioTotals.totalInput) * 100;
+        const monthlyChange = totalChange / portfolioMonthCount;
+        const monthlyPercentageChange =
+          totalPercentageChange / portfolioMonthCount;
+        return `${formatMoneyChange(totalChange)} ${formatMoneyChange(
+          totalPercentageChange,
           "%",
-        )} / ${
-          portfolioTotals.hasMissingOpenDate ||
-          portfolioTotals.monthlyChange === null ||
-          portfolioTotals.monthlyPercentageChange === null
-            ? "? ?"
-            : `${formatMoneyChange(portfolioTotals.monthlyChange)} ${formatMoneyChange(
-                portfolioTotals.monthlyPercentageChange,
-                "%",
-              )}`
-        }`;
+        )} / ${formatMoneyChange(monthlyChange)} ${formatMoneyChange(
+          monthlyPercentageChange,
+          "%",
+        )}`;
+      })();
 
   return [...tickerLines, totalSummary].join("\n\n");
 }
 
-export async function buildPerformanceList({
-  positions,
-  priceOverrides,
+export function buildHistory({
+  user,
   tickerDecorations,
   tickerLabelPreferences,
-}: BuildTickerListArgs) {
-  const now = new Date();
-  const performances = getSortedPositions(positions).map((position) =>
-    buildPositionPerformance(position, now, priceOverrides),
-  );
+}: BuildHistoryArgs) {
+  if (user.positions.length === 0) {
+    return "";
+  }
 
-  const performanceLines = performances.map((performance) => {
-    const { position } = performance;
+  const sorted = [...user.positions].sort((posA, posB) => {
+    const dateA = toDate(posA.date);
+    const dateB = toDate(posB.date);
+    return dateA.getTime() - dateB.getTime();
+  });
+
+  const pad = (value: number) => String(value).padStart(2, "0");
+
+  const grouped = new Map<number, { lines: string[]; total: number }>();
+  for (const position of sorted) {
+    const date = toDate(position.date);
+    const year = date.getFullYear();
+    const unitPrice =
+      position.amount === 0 ? 0 : position.price / position.amount;
     const tickerName = formatDecoratedTicker(
       position.ticker,
       tickerDecorations,
       tickerLabelPreferences,
     );
-    if (
-      performance.totalChange === null ||
-      performance.totalPercentageChange === null
-    ) {
-      return `${tickerName} ? ? (${performance.monthCount ?? "?"} month)`;
-    }
+    const line = `${pad(date.getDate())}.${pad(
+      date.getMonth() + 1,
+    )} ${tickerName} ${position.amount.toFixed(4)} x $${unitPrice.toFixed(
+      2,
+    )} ($${position.price.toFixed(0)})`;
+    const group = grouped.get(year) ?? { lines: [], total: 0 };
+    group.lines.push(line);
+    group.total += position.price;
+    grouped.set(year, group);
+  }
 
-    return `${tickerName} ${formatMoneyChange(
-      performance.totalPercentageChange,
-      "%",
-    )} ${formatMoneyChange(performance.totalChange)} (${
-      performance.monthCount ?? "?"
-    } month)`;
+  let grandTotal = 0;
+  const sections = [...grouped.entries()].map(([year, { lines, total }]) => {
+    grandTotal += total;
+    return `${year} - $${total.toFixed(0)}\n${lines.join("\n")}`;
   });
 
-  const portfolioTotals = buildPortfolioTotals(performances, now);
-  const totalLine =
-    portfolioTotals.totalChange === null ||
-    portfolioTotals.totalPercentageChange === null
-      ? `Total: ? ? (${portfolioTotals.monthCount ?? "?"} month)`
-      : `Total: ${formatMoneyChange(portfolioTotals.totalPercentageChange, "%")} ${formatMoneyChange(
-          portfolioTotals.totalChange,
-        )} (${portfolioTotals.monthCount ?? "?"} month)`;
-
-  return [...performanceLines, totalLine].join("\n\n");
+  sections.push(`Total $${grandTotal.toFixed(0)}`);
+  return sections.join("\n\n");
 }
 
 export function parsePriceOverrides(
@@ -319,158 +217,7 @@ export function parsePriceOverrides(
     if (!ticker || !priceStr || Number.isNaN(price)) {
       return null;
     }
-    overrides[ticker] = price;
+    overrides[ticker.trim().toUpperCase()] = price;
   }
   return overrides;
-}
-
-function formatDate(date: Date) {
-  const day = String(date.getUTCDate()).padStart(2, "0");
-  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-  return `${day}.${month}`;
-}
-
-const currencyCodes = new Set([
-  "AED",
-  "AUD",
-  "CAD",
-  "CHF",
-  "CNH",
-  "CNY",
-  "CZK",
-  "DKK",
-  "EUR",
-  "GBP",
-  "HKD",
-  "HUF",
-  "ILS",
-  "JPY",
-  "MXN",
-  "NOK",
-  "NZD",
-  "PLN",
-  "SEK",
-  "SGD",
-  "USD",
-  "ZAR",
-]);
-
-function isCurrencyConversionTrade(trade: FlexTrade) {
-  const assetCategory = trade.assetCategory?.toUpperCase();
-  if (assetCategory === "CASH" || assetCategory === "FOREX") {
-    return true;
-  }
-
-  const [base, quote] = trade.ticker.toUpperCase().split(".");
-  return Boolean(
-    base &&
-      quote &&
-      currencyCodes.has(base) &&
-      currencyCodes.has(quote),
-  );
-}
-
-function getTradeHistoryKey(trade: FlexTrade) {
-  return [
-    trade.date.toISOString().slice(0, 10),
-    trade.ticker,
-    trade.currency ?? "USD",
-  ].join(":");
-}
-
-function buildTradeHistoryGroups(trades: FlexTrade[]) {
-  const grouped = new Map<
-    string,
-    {
-      date: Date;
-      ticker: string;
-      currency: string;
-      quantity: number;
-      total: number;
-    }
-  >();
-
-  for (const trade of trades) {
-    if (
-      trade.quantity <= 0 ||
-      trade.price === null ||
-      isCurrencyConversionTrade(trade)
-    ) {
-      continue;
-    }
-
-    const key = getTradeHistoryKey(trade);
-    const group = grouped.get(key) ?? {
-      date: trade.date,
-      ticker: trade.ticker,
-      currency: trade.currency ?? "USD",
-      quantity: 0,
-      total: 0,
-    };
-    group.quantity += trade.quantity;
-    group.total += trade.quantity * trade.price;
-    grouped.set(key, group);
-  }
-
-  return [...grouped.values()].sort(
-    (groupA, groupB) => groupA.date.getTime() - groupB.date.getTime(),
-  );
-}
-
-export function buildTradeHistory({
-  trades,
-  tickerDecorations,
-  tickerLabelPreferences,
-}: BuildTradeHistoryArgs) {
-  const sorted = buildTradeHistoryGroups(trades);
-  if (sorted.length === 0) {
-    return "";
-  }
-
-  const grouped = new Map<number, string[]>();
-  const yearTotals = new Map<number, { total: number; currency: string }>();
-  let totalSpent = 0;
-  let totalCurrency = "USD";
-
-  for (const group of sorted) {
-    const year = group.date.getUTCFullYear();
-    const lines = grouped.get(year) ?? [];
-    const averagePrice = group.total / group.quantity;
-    const tickerName = formatDecoratedTicker(
-      group.ticker,
-      tickerDecorations,
-      tickerLabelPreferences,
-    );
-    lines.push(
-      `${formatDate(group.date)} ${tickerName} ${group.quantity.toFixed(
-        4,
-      )} x ${formatMoney(averagePrice, group.currency)} (${formatWholeMoney(
-        group.total,
-        group.currency,
-      )})`,
-    );
-    grouped.set(year, lines);
-
-    const yearTotal = yearTotals.get(year) ?? {
-      total: 0,
-      currency: group.currency,
-    };
-    yearTotal.total += group.total;
-    yearTotals.set(year, yearTotal);
-    totalSpent += group.total;
-    totalCurrency = group.currency;
-  }
-
-  const yearBlocks = [...grouped.entries()].map(([year, lines]) => {
-    const yearTotal = yearTotals.get(year);
-    const header = yearTotal
-      ? `${year} · ${formatWholeMoney(yearTotal.total, yearTotal.currency)}`
-      : String(year);
-    return `${header}\n${lines.join("\n")}`;
-  });
-
-  return `${yearBlocks.join("\n\n")}\n\nTotal ${formatWholeMoney(
-    totalSpent,
-    totalCurrency,
-  )}`;
 }
