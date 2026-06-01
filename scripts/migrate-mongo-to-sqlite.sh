@@ -21,6 +21,8 @@ SQLITE_CONTAINER_PATH="${SQLITE_CONTAINER_PATH:-/app/data/eyri.sqlite}"
 MONGO_IMAGE="${MONGO_IMAGE:-docker.io/library/mongo:7}"
 DENO_IMAGE="${DENO_IMAGE:-docker.io/denoland/deno:2.5.4}"
 CREATED_MONGO_CONTAINER=""
+SQLITE_ABS_PATH="/home/kitkat/.local/share/containers/storage/volumes/eyri_eyri-data/_data/eyri.sqlite"
+SQLITE_PATH="$SQLITE_ABS_PATH"
 
 BIND_MOUNT_SUFFIX=""
 if [[ "$CONTAINER_RUNTIME" == *podman* ]]; then
@@ -155,9 +157,6 @@ find_sqlite_path() {
   printf '%s/data/eyri.sqlite\n' "$ROOT_DIR"
 }
 
-SQLITE_ABS_PATH=""
-SQLITE_PATH=""
-
 if [[ -z "$MONGO_CONTAINER" && -z "$MONGO_VOLUME" ]]; then
   MONGO_CONTAINER="$(find_mongo_container)"
 fi
@@ -166,26 +165,7 @@ if [[ -z "$MONGO_CONTAINER" && -z "$MONGO_VOLUME" ]]; then
   MONGO_VOLUME="$(find_old_mongo_volume)"
 fi
 
-if [[ -z "$APP_CONTAINER" ]]; then
-  APP_CONTAINER="$(find_app_container)"
-fi
-
-if [[ -n "$APP_CONTAINER" ]] && container_exists "$APP_CONTAINER"; then
-  SQLITE_DIR="$(find_container_mount_source "$APP_CONTAINER" "/app/data")"
-  if [[ -z "$SQLITE_DIR" ]]; then
-    echo "Could not find the /app/data mount source for app container '$APP_CONTAINER'." >&2
-    exit 1
-  fi
-  SQLITE_ABS_PATH="$SQLITE_DIR/eyri.sqlite"
-  SQLITE_PATH="$SQLITE_ABS_PATH"
-  if container_is_running "$APP_CONTAINER"; then
-    echo "App container '$APP_CONTAINER' is running; stop it before migration so SQLite is not open." >&2
-    exit 1
-  fi
-else
-  SQLITE_ABS_PATH="$(find_sqlite_path)"
-  SQLITE_PATH="${EYRI_DATABASE_PATH:-$SQLITE_ABS_PATH}"
-fi
+echo "Using hardcoded SQLite database: $SQLITE_ABS_PATH"
 
 cleanup() {
   if [[ -n "$CREATED_MONGO_CONTAINER" ]]; then
@@ -267,6 +247,13 @@ dump_collection user "$TMP_DIR/users.json"
 dump_collection price "$TMP_DIR/prices.json"
 
 mkdir -p "$(dirname "$SQLITE_ABS_PATH")"
+
+echo "JSON users data:"
+cat "$TMP_DIR/users.json"
+echo
+echo "JSON prices data:"
+cat "$TMP_DIR/prices.json"
+echo
 
 echo "Loading dump into SQLite database '$SQLITE_PATH'..."
 if command -v deno >/dev/null 2>&1; then

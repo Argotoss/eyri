@@ -19,6 +19,14 @@ type MongoPrice = {
   date?: unknown;
 };
 
+type PositionDebugRow = {
+  user_id: number;
+  ticker: string;
+  amount: number;
+  price: number;
+  date: string;
+};
+
 function numberFrom(value: unknown): number | null {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : null;
@@ -94,11 +102,27 @@ function getArg(name: string) {
   return value.slice(prefix.length);
 }
 
+function readPositionRows() {
+  return database.prepare(`
+    SELECT user_id, ticker, amount, price, date
+    FROM positions
+    ORDER BY user_id, date, id
+  `).all() as PositionDebugRow[];
+}
+
 const usersPath = getArg("users");
 const pricesPath = getArg("prices");
 const users = await readJsonArray<MongoUser>(usersPath);
 const prices = await readJsonArray<MongoPrice>(pricesPath);
 const database = await connectToDb();
+
+console.log("SQLite database path:", Deno.env.get("EYRI_DATABASE_PATH"));
+console.log("JSON users data:");
+console.log(JSON.stringify(users, null, 2));
+console.log("JSON prices data:");
+console.log(JSON.stringify(prices, null, 2));
+console.log("Fetched positions now from SQLite:");
+console.log(JSON.stringify(readPositionRows(), null, 2));
 
 let importedUsers = 0;
 let importedPositions = 0;
@@ -184,6 +208,8 @@ try {
   }
 
   database.exec("COMMIT");
+  console.log("Fetched positions after insertion:");
+  console.log(JSON.stringify(readPositionRows(), null, 2));
 } catch (error) {
   database.exec("ROLLBACK");
   throw error;
