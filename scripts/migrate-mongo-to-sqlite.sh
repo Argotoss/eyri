@@ -6,6 +6,7 @@ CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-docker}"
 MONGO_DB="${MONGO_DB:-eyri}"
 MONGO_CONTAINER="${MONGO_CONTAINER:-${1:-}}"
 SQLITE_PATH="${EYRI_DATABASE_PATH:-data/eyri.sqlite}"
+DENO_IMAGE="${DENO_IMAGE:-docker.io/denoland/deno:2.5.4}"
 
 if [[ "$SQLITE_PATH" = /* ]]; then
   SQLITE_ABS_PATH="$SQLITE_PATH"
@@ -51,11 +52,6 @@ USAGE
   exit 1
 fi
 
-if ! command -v deno >/dev/null 2>&1; then
-  echo "deno is required to load the dump into SQLite." >&2
-  exit 1
-fi
-
 if ! command -v "$CONTAINER_RUNTIME" >/dev/null 2>&1; then
   echo "$CONTAINER_RUNTIME is required to dump from the Mongo container." >&2
   exit 1
@@ -84,12 +80,28 @@ dump_collection price "$TMP_DIR/prices.json"
 mkdir -p "$(dirname "$SQLITE_ABS_PATH")"
 
 echo "Loading dump into SQLite database '$SQLITE_PATH'..."
-(
-  cd "$ROOT_DIR"
-  EYRI_DATABASE_PATH="$SQLITE_ABS_PATH" deno run -A \
-    scripts/load-mongo-json-to-sqlite.ts \
-    --users="$TMP_DIR/users.json" \
-    --prices="$TMP_DIR/prices.json"
-)
+if command -v deno >/dev/null 2>&1; then
+  (
+    cd "$ROOT_DIR"
+    EYRI_DATABASE_PATH="$SQLITE_ABS_PATH" deno run -A \
+      scripts/load-mongo-json-to-sqlite.ts \
+      --users="$TMP_DIR/users.json" \
+      --prices="$TMP_DIR/prices.json"
+  )
+else
+  SQLITE_DIR="$(dirname "$SQLITE_ABS_PATH")"
+  SQLITE_FILE="$(basename "$SQLITE_ABS_PATH")"
+
+  "$CONTAINER_RUNTIME" run --rm \
+    -v "$ROOT_DIR:/app" \
+    -v "$TMP_DIR:/dump" \
+    -v "$SQLITE_DIR:/sqlite" \
+    -w /app \
+    -e "EYRI_DATABASE_PATH=/sqlite/$SQLITE_FILE" \
+    "$DENO_IMAGE" \
+    run -A scripts/load-mongo-json-to-sqlite.ts \
+      --users=/dump/users.json \
+      --prices=/dump/prices.json
+fi
 
 echo "Migration complete."

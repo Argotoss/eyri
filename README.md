@@ -14,7 +14,7 @@ Run once while the old Mongo container is still available:
 scripts/migrate-mongo-to-sqlite.sh <mongo-container-name>
 ```
 
-Defaults can be overridden with `MONGO_CONTAINER`, `MONGO_DB`, `EYRI_DATABASE_PATH`, and `CONTAINER_RUNTIME`.
+Defaults can be overridden with `MONGO_CONTAINER`, `MONGO_DB`, `EYRI_DATABASE_PATH`, `CONTAINER_RUNTIME`, and `DENO_IMAGE`.
 
 When the app runs in Podman Compose, migrate directly into the app data volume:
 
