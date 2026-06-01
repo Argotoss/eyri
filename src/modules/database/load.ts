@@ -12,6 +12,19 @@ type MongoPosition = {
   date?: unknown;
 };
 
+type PositionRowInput = MongoPosition & {
+  user_id?: unknown;
+  userId?: unknown;
+};
+
+type ParsedPosition = {
+  userId: number | null;
+  ticker: string | null;
+  amount: number | null;
+  price: number | null;
+  date: string;
+};
+
 export type LoadMongoUsersResult = {
   importedUsers: number;
   importedPositions: number;
@@ -76,22 +89,67 @@ function tickerFrom(value: unknown): string | null {
     : null;
 }
 
-function parseUsers(input: string): MongoUser[] {
+function hasFlatPositionShape(value: unknown): value is PositionRowInput {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      "ticker" in value &&
+      ("user_id" in value || "userId" in value),
+  );
+}
+
+function parseInput(input: string): ParsedPosition[] {
   const parsed = JSON.parse(input);
-  if (Array.isArray(parsed)) {
-    return parsed as MongoUser[];
+  const documents = Array.isArray(parsed) ? parsed : [parsed];
+  const positions: ParsedPosition[] = [];
+
+  for (const document of documents) {
+    if (hasFlatPositionShape(document)) {
+      positions.push({
+        userId: numberFrom(document.user_id ?? document.userId),
+        ticker: tickerFrom(document.ticker),
+        amount: numberFrom(document.amount),
+        price: numberFrom(document.price),
+        date: dateFrom(document.date),
+      });
+      continue;
+    }
+
+    if (!document || typeof document !== "object") {
+      continue;
+    }
+
+    const user = document as MongoUser;
+    const userId = numberFrom(user.userId);
+    for (const position of user.positions ?? []) {
+      positions.push({
+        userId,
+        ticker: tickerFrom(position.ticker),
+        amount: numberFrom(position.amount),
+        price: numberFrom(position.price),
+        date: dateFrom(position.date),
+      });
+    }
+
+    if ((user.positions ?? []).length === 0) {
+      positions.push({
+        userId,
+        ticker: null,
+        amount: null,
+        price: null,
+        date: new Date().toISOString(),
+      });
+    }
   }
-  if (parsed && typeof parsed === "object") {
-    return [parsed as MongoUser];
-  }
-  throw new Error("Expected a Mongo user document or an array of documents");
+
+  return positions;
 }
 
 export function loadMongoUsers(
   database: Database,
   input: string,
 ): LoadMongoUsersResult {
-  const users = parseUsers(input);
+  const positions = parseInput(input);
   const result: LoadMongoUsersResult = {
     importedUsers: 0,
     importedPositions: 0,
@@ -120,43 +178,43 @@ export function loadMongoUsers(
       )
     `);
 
-    for (const user of users) {
-      const userId = numberFrom(user.userId);
-      if (userId === null) {
+    const importedUserIds = new Set<number>();
+    for (const position of positions) {
+      if (position.userId === null) {
         result.skippedUsers += 1;
         continue;
       }
 
-      insertUser.run(userId);
-      result.importedUsers += 1;
+      insertUser.run(position.userId);
+      if (!importedUserIds.has(position.userId)) {
+        importedUserIds.add(position.userId);
+        result.importedUsers += 1;
+      }
 
-      for (const position of user.positions ?? []) {
-        const ticker = tickerFrom(position.ticker);
-        const amount = numberFrom(position.amount);
-        const price = numberFrom(position.price);
-        const date = dateFrom(position.date);
+      if (
+        !position.ticker ||
+        position.amount === null ||
+        position.price === null
+      ) {
+        result.skippedPositions += 1;
+        continue;
+      }
 
-        if (!ticker || amount === null || price === null) {
-          result.skippedPositions += 1;
-          continue;
-        }
-
-        const changes = insertPosition.run(
-          userId,
-          ticker,
-          amount,
-          price,
-          date,
-          userId,
-          ticker,
-          amount,
-          price,
-          date,
-        );
-        result.importedPositions += changes;
-        if (changes === 0) {
-          result.skippedPositions += 1;
-        }
+      const changes = insertPosition.run(
+        position.userId,
+        position.ticker,
+        position.amount,
+        position.price,
+        position.date,
+        position.userId,
+        position.ticker,
+        position.amount,
+        position.price,
+        position.date,
+      );
+      result.importedPositions += changes;
+      if (changes === 0) {
+        result.skippedPositions += 1;
       }
     }
 
