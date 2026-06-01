@@ -119,6 +119,15 @@ find_app_container() {
     | head -n 1 || true
 }
 
+find_container_mount_source() {
+  local container="$1"
+  local destination="$2"
+
+  "$CONTAINER_RUNTIME" inspect "$container" \
+    --format "{{ range .Mounts }}{{ if eq .Destination \"$destination\" }}{{ .Source }}{{ end }}{{ end }}" \
+    2>/dev/null || true
+}
+
 find_sqlite_path() {
   if [[ -n "${EYRI_DATABASE_PATH:-}" ]]; then
     if [[ "$EYRI_DATABASE_PATH" = /* ]]; then
@@ -146,28 +155,6 @@ find_sqlite_path() {
   printf '%s/data/eyri.sqlite\n' "$ROOT_DIR"
 }
 
-copy_sqlite_from_app_container() {
-  local output_path="$1"
-
-  mkdir -p "$(dirname "$output_path")"
-  if [[ -n "$APP_CONTAINER" ]] && container_exists "$APP_CONTAINER"; then
-    "$CONTAINER_RUNTIME" cp \
-      "$APP_CONTAINER:$SQLITE_CONTAINER_PATH" \
-      "$output_path" 2>/dev/null || true
-  fi
-}
-
-copy_sqlite_to_app_container() {
-  local input_path="$1"
-
-  if [[ -z "$APP_CONTAINER" ]]; then
-    return
-  fi
-
-  echo "Copying migrated SQLite database into app container '$APP_CONTAINER:$SQLITE_CONTAINER_PATH'..."
-  "$CONTAINER_RUNTIME" cp "$input_path" "$APP_CONTAINER:$SQLITE_CONTAINER_PATH"
-}
-
 SQLITE_ABS_PATH=""
 SQLITE_PATH=""
 
@@ -184,10 +171,16 @@ if [[ -z "$APP_CONTAINER" ]]; then
 fi
 
 if [[ -n "$APP_CONTAINER" ]] && container_exists "$APP_CONTAINER"; then
-  SQLITE_ABS_PATH="$TMP_DIR/eyri.sqlite"
-  SQLITE_PATH="$APP_CONTAINER:$SQLITE_CONTAINER_PATH"
+  SQLITE_DIR="$(find_container_mount_source "$APP_CONTAINER" "/app/data")"
+  if [[ -z "$SQLITE_DIR" ]]; then
+    echo "Could not find the /app/data mount source for app container '$APP_CONTAINER'." >&2
+    exit 1
+  fi
+  SQLITE_ABS_PATH="$SQLITE_DIR/eyri.sqlite"
+  SQLITE_PATH="$SQLITE_ABS_PATH"
   if container_is_running "$APP_CONTAINER"; then
-    echo "App container '$APP_CONTAINER' is running; restart it after migration so it reopens the SQLite file."
+    echo "App container '$APP_CONTAINER' is running; stop it before migration so SQLite is not open." >&2
+    exit 1
   fi
 else
   SQLITE_ABS_PATH="$(find_sqlite_path)"
@@ -274,7 +267,6 @@ dump_collection user "$TMP_DIR/users.json"
 dump_collection price "$TMP_DIR/prices.json"
 
 mkdir -p "$(dirname "$SQLITE_ABS_PATH")"
-copy_sqlite_from_app_container "$SQLITE_ABS_PATH"
 
 echo "Loading dump into SQLite database '$SQLITE_PATH'..."
 if command -v deno >/dev/null 2>&1; then
@@ -286,36 +278,19 @@ if command -v deno >/dev/null 2>&1; then
       --prices="$TMP_DIR/prices.json"
   )
 else
-  if [[ "$SQLITE_PATH" == "$APP_CONTAINER:$SQLITE_CONTAINER_PATH" ]]; then
-    "$CONTAINER_RUNTIME" run --rm \
-      -v "$ROOT_DIR:/app:ro${BIND_MOUNT_SUFFIX}" \
-      -v "$TMP_DIR:/dump:ro${BIND_MOUNT_SUFFIX}" \
-      -v "$TMP_DIR:/sqlite${BIND_MOUNT_SUFFIX}" \
-      -w /app \
-      -e "EYRI_DATABASE_PATH=/sqlite/eyri.sqlite" \
-      "$DENO_IMAGE" \
-      run -A scripts/load-mongo-json-to-sqlite.ts \
-        --users=/dump/users.json \
-        --prices=/dump/prices.json
-  else
-    SQLITE_DIR="$(dirname "$SQLITE_ABS_PATH")"
-    SQLITE_FILE="$(basename "$SQLITE_ABS_PATH")"
+  SQLITE_DIR="$(dirname "$SQLITE_ABS_PATH")"
+  SQLITE_FILE="$(basename "$SQLITE_ABS_PATH")"
 
-    "$CONTAINER_RUNTIME" run --rm \
-      -v "$ROOT_DIR:/app:ro${BIND_MOUNT_SUFFIX}" \
-      -v "$TMP_DIR:/dump:ro${BIND_MOUNT_SUFFIX}" \
-      -v "$SQLITE_DIR:/sqlite${BIND_MOUNT_SUFFIX}" \
-      -w /app \
-      -e "EYRI_DATABASE_PATH=/sqlite/$SQLITE_FILE" \
-      "$DENO_IMAGE" \
-      run -A scripts/load-mongo-json-to-sqlite.ts \
-        --users=/dump/users.json \
-        --prices=/dump/prices.json
-  fi
-fi
-
-if [[ "$SQLITE_PATH" == "$APP_CONTAINER:$SQLITE_CONTAINER_PATH" ]]; then
-  copy_sqlite_to_app_container "$SQLITE_ABS_PATH"
+  "$CONTAINER_RUNTIME" run --rm \
+    -v "$ROOT_DIR:/app:ro${BIND_MOUNT_SUFFIX}" \
+    -v "$TMP_DIR:/dump:ro${BIND_MOUNT_SUFFIX}" \
+    -v "$SQLITE_DIR:/sqlite${BIND_MOUNT_SUFFIX}" \
+    -w /app \
+    -e "EYRI_DATABASE_PATH=/sqlite/$SQLITE_FILE" \
+    "$DENO_IMAGE" \
+    run -A scripts/load-mongo-json-to-sqlite.ts \
+      --users=/dump/users.json \
+      --prices=/dump/prices.json
 fi
 
 echo "Migration complete."
