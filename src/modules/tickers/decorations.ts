@@ -10,6 +10,7 @@ export type TickerDecoration = {
 
 export type TickerDecorations = Record<string, TickerDecoration[]>;
 export type TickerLabelPreferences = Record<string, string | false>;
+export type TickerLabelLinks = Record<string, string>;
 
 type TickerDecorationRow = {
   ticker: string;
@@ -22,6 +23,11 @@ type TickerDecorationRow = {
 type TickerLabelPreferenceRow = {
   ticker: string;
   label: string;
+};
+
+type TickerLabelLinkRow = {
+  ticker: string;
+  tag: string;
 };
 
 type TableColumn = {
@@ -110,6 +116,19 @@ function createTickerLabelPreferencesTable(db: Database) {
   `);
 }
 
+function createTickerLabelLinksTable(db: Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ticker_label_links (
+      user_id TEXT NOT NULL,
+      ticker TEXT NOT NULL,
+      tag TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, ticker)
+    )
+  `);
+}
+
 function hasExpectedTickerLabelPreferencesSchema(db: Database) {
   const columns = getTableColumns(db, "ticker_label_preferences");
   const primaryKeyColumns = columns
@@ -121,6 +140,23 @@ function hasExpectedTickerLabelPreferencesSchema(db: Database) {
     hasColumn(columns, "user_id") &&
     hasColumn(columns, "ticker") &&
     hasColumn(columns, "label") &&
+    primaryKeyColumns.join(",") === "user_id,ticker"
+  );
+}
+
+function hasExpectedTickerLabelLinksSchema(db: Database) {
+  const columns = getTableColumns(db, "ticker_label_links");
+  const primaryKeyColumns = columns
+    .filter((column) => column.pk > 0)
+    .sort((columnA, columnB) => columnA.pk - columnB.pk)
+    .map((column) => column.name);
+
+  return (
+    hasColumn(columns, "user_id") &&
+    hasColumn(columns, "ticker") &&
+    hasColumn(columns, "tag") &&
+    hasColumn(columns, "created_at") &&
+    hasColumn(columns, "updated_at") &&
     primaryKeyColumns.join(",") === "user_id,ticker"
   );
 }
@@ -186,6 +222,42 @@ function migrateTickerLabelPreferencesTable(db: Database) {
   db.exec("DROP TABLE ticker_label_preferences_old;");
 }
 
+function migrateTickerLabelLinksTable(db: Database) {
+  const columns = getTableColumns(db, "ticker_label_links");
+  const hasTag = hasColumn(columns, "tag");
+  const hasCreatedAt = hasColumn(columns, "created_at");
+  const hasUpdatedAt = hasColumn(columns, "updated_at");
+
+  db.exec(`
+    ALTER TABLE ticker_label_links RENAME TO ticker_label_links_old;
+  `);
+  createTickerLabelLinksTable(db);
+
+  if (hasTag) {
+    db.exec(`
+      INSERT INTO ticker_label_links (
+        user_id,
+        ticker,
+        tag,
+        created_at,
+        updated_at
+      )
+      SELECT
+        user_id,
+        ticker,
+        tag,
+        ${hasCreatedAt ? "created_at" : "CURRENT_TIMESTAMP"},
+        ${hasUpdatedAt ? "updated_at" : "CURRENT_TIMESTAMP"}
+      FROM ticker_label_links_old;
+
+      DROP TABLE ticker_label_links_old;
+    `);
+    return;
+  }
+
+  db.exec("DROP TABLE ticker_label_links_old;");
+}
+
 function migrateTickerDecorationsTable(db: Database) {
   const columns = getTableColumns(db, "ticker_decorations");
   const hasEmojiIndex = hasColumn(columns, "emoji_index");
@@ -231,6 +303,12 @@ function ensureSchema(db: Database) {
     createTickerLabelPreferencesTable(db);
   } else if (!hasExpectedTickerLabelPreferencesSchema(db)) {
     migrateTickerLabelPreferencesTable(db);
+  }
+
+  if (!tableExists(db, "ticker_label_links")) {
+    createTickerLabelLinksTable(db);
+  } else if (!hasExpectedTickerLabelLinksSchema(db)) {
+    migrateTickerLabelLinksTable(db);
   }
 }
 
@@ -350,6 +428,54 @@ export async function setTickerLabelPreference(
   );
 }
 
+export async function readTickerLabelLinks(
+  userId: string | number,
+): Promise<TickerLabelLinks> {
+  const db = await getDatabase();
+  ensureSchema(db);
+  const rows = db
+    .prepare(`
+      SELECT ticker, tag
+      FROM ticker_label_links
+      WHERE user_id = ?
+    `)
+    .all(String(userId)) as TickerLabelLinkRow[];
+
+  return Object.fromEntries(
+    rows.map((row) => [normalizeTicker(row.ticker), row.tag]),
+  );
+}
+
+export async function setTickerLabelLink(
+  userId: string | number,
+  ticker: string,
+  tag: string | false,
+) {
+  const db = await getDatabase();
+  ensureSchema(db);
+  const normalizedUserId = String(userId);
+  const normalizedTicker = normalizeTicker(ticker);
+
+  if (tag === false) {
+    db.prepare(`
+      DELETE FROM ticker_label_links
+      WHERE user_id = ? AND ticker = ?
+    `).run(normalizedUserId, normalizedTicker);
+    return;
+  }
+
+  db.prepare(`
+    INSERT INTO ticker_label_links (
+      user_id,
+      ticker,
+      tag
+    ) VALUES (?, ?, ?)
+    ON CONFLICT(user_id, ticker) DO UPDATE SET
+      tag = excluded.tag,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(normalizedUserId, normalizedTicker, tag);
+}
+
 export function escapeHtml(value: string) {
   return value
     .replaceAll("&", "&amp;")
@@ -375,24 +501,39 @@ export function formatTickerDecorations(decorations: TickerDecoration[]) {
   return decorations.map(formatTickerDecoration).join("");
 }
 
+function formatTickerLabel(label: string, linkTag?: string) {
+  const formattedLabel = escapeHtml(label);
+  if (!linkTag) {
+    return formattedLabel;
+  }
+
+  return `<a href="${escapeHtmlAttribute(
+    `https://www.google.com/finance/beta/quote/${linkTag}`,
+  )}">${formattedLabel}</a>`;
+}
+
 export function formatDecoratedTicker(
   ticker: string,
   decorations?: TickerDecorations,
   labelPreferences?: TickerLabelPreferences,
+  labelLinks?: TickerLabelLinks,
 ) {
   const normalizedTicker = normalizeTicker(ticker);
   const labelPreference = labelPreferences?.[normalizedTicker];
   const label = labelPreference === false ? null : (labelPreference ?? ticker);
+  const linkTag = label === null ? undefined : labelLinks?.[normalizedTicker];
   const tickerDecorations = decorations?.[normalizedTicker];
   const decorated =
     tickerDecorations && tickerDecorations.length > 0
       ? formatTickerDecorations(tickerDecorations)
       : null;
   if (!decorated) {
-    return label === null ? "" : escapeHtml(label);
+    return label === null ? "" : formatTickerLabel(label, linkTag);
   }
 
-  return label === null ? decorated : `${decorated} ${escapeHtml(label)}`;
+  return label === null
+    ? decorated
+    : `${decorated} ${formatTickerLabel(label, linkTag)}`;
 }
 
 export function parseDecorateCommand(ctx: CustomContext): {
@@ -499,5 +640,27 @@ export function parseLabelCommand(input: string): {
   return {
     ticker: normalizeTicker(ticker),
     label: label === "false" ? false : label,
+  };
+}
+
+export function parseLinkCommand(input: string): {
+  ticker: string;
+  tag: string | false;
+} | null {
+  const trimmedInput = input.trim();
+  const tickerMatch = trimmedInput.match(/^\S+/);
+  if (!tickerMatch) {
+    return null;
+  }
+
+  const ticker = tickerMatch[0];
+  const tag = trimmedInput.slice(ticker.length).trim();
+  if (!tag) {
+    return null;
+  }
+
+  return {
+    ticker: normalizeTicker(ticker),
+    tag: tag === "false" ? false : tag,
   };
 }

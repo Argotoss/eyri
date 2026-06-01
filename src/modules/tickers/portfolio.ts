@@ -5,6 +5,7 @@ import { getPositions, type User } from "../database/user.ts";
 import {
   formatDecoratedTicker,
   type TickerDecorations,
+  type TickerLabelLinks,
   type TickerLabelPreferences,
 } from "./decorations.ts";
 
@@ -14,12 +15,14 @@ type BuildTickerListArgs = {
   priceOverrides?: Record<string, number>;
   tickerDecorations?: TickerDecorations;
   tickerLabelPreferences?: TickerLabelPreferences;
+  tickerLabelLinks?: TickerLabelLinks;
 };
 
 type BuildHistoryArgs = {
   user: User;
   tickerDecorations?: TickerDecorations;
   tickerLabelPreferences?: TickerLabelPreferences;
+  tickerLabelLinks?: TickerLabelLinks;
 };
 
 type TickerPositionSummary = {
@@ -86,6 +89,7 @@ export async function buildTickerList({
   priceOverrides,
   tickerDecorations,
   tickerLabelPreferences,
+  tickerLabelLinks,
 }: BuildTickerListArgs) {
   if (user.positions.length === 0) {
     return "";
@@ -124,6 +128,7 @@ export async function buildTickerList({
         ticker,
         tickerDecorations,
         tickerLabelPreferences,
+        tickerLabelLinks,
       );
       const currentPrice = priceOverrides?.[ticker] ?? prices[ticker]?.price;
       const oldestDate = earliestDatesByTicker[ticker];
@@ -212,6 +217,7 @@ export async function buildPerformanceList({
   priceOverrides,
   tickerDecorations,
   tickerLabelPreferences,
+  tickerLabelLinks,
 }: BuildTickerListArgs) {
   if (user.positions.length === 0) {
     return "";
@@ -246,6 +252,7 @@ export async function buildPerformanceList({
       ticker,
       tickerDecorations,
       tickerLabelPreferences,
+      tickerLabelLinks,
     );
     const currentPrice = priceOverrides?.[ticker] ?? prices[ticker]?.price;
     const elapsedPeriod = getElapsedPeriod(position.oldestDate, now);
@@ -294,6 +301,7 @@ export function buildHistory({
   user,
   tickerDecorations,
   tickerLabelPreferences,
+  tickerLabelLinks,
 }: BuildHistoryArgs) {
   if (user.positions.length === 0) {
     return "";
@@ -318,6 +326,7 @@ export function buildHistory({
       position.ticker,
       tickerDecorations,
       tickerLabelPreferences,
+      tickerLabelLinks,
     );
     const line = `${pad(date.getDate())}.${
       pad(

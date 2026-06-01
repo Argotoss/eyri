@@ -7,9 +7,12 @@ import {
   formatTickerDecorations,
   parseDecorateCommand,
   parseLabelCommand,
+  parseLinkCommand,
   readTickerDecorations,
+  readTickerLabelLinks,
   readTickerLabelPreferences,
   setTickerDecoration,
+  setTickerLabelLink,
   setTickerLabelPreference,
 } from "./decorations.ts";
 import {
@@ -20,6 +23,13 @@ import {
 } from "./portfolio.ts";
 
 export const tickersComposer = new Composer<CustomContext>();
+
+const htmlReplyOptions = {
+  parse_mode: "HTML" as const,
+  link_preview_options: {
+    is_disabled: true,
+  },
+};
 
 tickersComposer.command("buy", async (ctx) => {
   if (!ctx.dbEntities.user) {
@@ -66,12 +76,10 @@ tickersComposer.command("decorate", async (ctx) => {
 
   await setTickerDecoration(ctx.from.id, parsed.ticker, parsed.decorations);
   await ctx.reply(
-    `${formatTickerDecorations(parsed.decorations)} ${
-      escapeHtml(
-        parsed.ticker,
-      )
-    } decorated (${parsed.decorations.length}).`,
-    { parse_mode: "HTML" },
+    `${formatTickerDecorations(parsed.decorations)} ${escapeHtml(
+      parsed.ticker,
+    )} decorated (${parsed.decorations.length}).`,
+    htmlReplyOptions,
   );
 });
 
@@ -85,9 +93,26 @@ tickersComposer.command("label", async (ctx) => {
   await setTickerLabelPreference(ctx.from.id, parsed.ticker, parsed.label);
   const labelStatus =
     parsed.label === false ? "hidden" : `set to ${escapeHtml(parsed.label)}`;
-  await ctx.reply(`${escapeHtml(parsed.ticker)} label ${labelStatus}.`, {
-    parse_mode: "HTML",
-  });
+  await ctx.reply(
+    `${escapeHtml(parsed.ticker)} label ${labelStatus}.`,
+    htmlReplyOptions,
+  );
+});
+
+tickersComposer.command("link", async (ctx) => {
+  const parsed = parseLinkCommand(ctx.match || "");
+  if (!parsed || !ctx.from) {
+    await ctx.text("link");
+    return;
+  }
+
+  await setTickerLabelLink(ctx.from.id, parsed.ticker, parsed.tag);
+  const linkStatus =
+    parsed.tag === false ? "removed" : `set to ${escapeHtml(parsed.tag)}`;
+  await ctx.reply(
+    `${escapeHtml(parsed.ticker)} link ${linkStatus}.`,
+    htmlReplyOptions,
+  );
 });
 
 tickersComposer.command("tickers", async (ctx) => {
@@ -98,11 +123,13 @@ tickersComposer.command("tickers", async (ctx) => {
 
   const tickerDecorations = await readTickerDecorations(ctx.from.id);
   const tickerLabelPreferences = await readTickerLabelPreferences(ctx.from.id);
+  const tickerLabelLinks = await readTickerLabelLinks(ctx.from.id);
   const priceList = await buildTickerList({
     database: ctx.db,
     user: ctx.dbEntities.user,
     tickerDecorations,
     tickerLabelPreferences,
+    tickerLabelLinks,
   });
 
   if (priceList.length === 0) {
@@ -110,7 +137,7 @@ tickersComposer.command("tickers", async (ctx) => {
     return;
   }
 
-  await ctx.reply(priceList, { parse_mode: "HTML" });
+  await ctx.reply(priceList, htmlReplyOptions);
 });
 
 tickersComposer.command("perf", async (ctx) => {
@@ -121,11 +148,13 @@ tickersComposer.command("perf", async (ctx) => {
 
   const tickerDecorations = await readTickerDecorations(ctx.from.id);
   const tickerLabelPreferences = await readTickerLabelPreferences(ctx.from.id);
+  const tickerLabelLinks = await readTickerLabelLinks(ctx.from.id);
   const performanceList = await buildPerformanceList({
     database: ctx.db,
     user: ctx.dbEntities.user,
     tickerDecorations,
     tickerLabelPreferences,
+    tickerLabelLinks,
   });
 
   if (performanceList.length === 0) {
@@ -133,7 +162,7 @@ tickersComposer.command("perf", async (ctx) => {
     return;
   }
 
-  await ctx.reply(performanceList, { parse_mode: "HTML" });
+  await ctx.reply(performanceList, htmlReplyOptions);
 });
 
 tickersComposer.command("history", async (ctx) => {
@@ -144,10 +173,12 @@ tickersComposer.command("history", async (ctx) => {
 
   const tickerDecorations = await readTickerDecorations(ctx.from.id);
   const tickerLabelPreferences = await readTickerLabelPreferences(ctx.from.id);
+  const tickerLabelLinks = await readTickerLabelLinks(ctx.from.id);
   const history = buildHistory({
     user: ctx.dbEntities.user,
     tickerDecorations,
     tickerLabelPreferences,
+    tickerLabelLinks,
   });
 
   if (history.length === 0) {
@@ -155,7 +186,7 @@ tickersComposer.command("history", async (ctx) => {
     return;
   }
 
-  await ctx.reply(history, { parse_mode: "HTML" });
+  await ctx.reply(history, htmlReplyOptions);
 });
 
 tickersComposer.command("when", async (ctx) => {
@@ -177,12 +208,14 @@ tickersComposer.command("when", async (ctx) => {
 
   const tickerDecorations = await readTickerDecorations(ctx.from.id);
   const tickerLabelPreferences = await readTickerLabelPreferences(ctx.from.id);
+  const tickerLabelLinks = await readTickerLabelLinks(ctx.from.id);
   const priceList = await buildTickerList({
     database: ctx.db,
     user: ctx.dbEntities.user,
     priceOverrides,
     tickerDecorations,
     tickerLabelPreferences,
+    tickerLabelLinks,
   });
 
   if (priceList.length === 0) {
@@ -190,5 +223,5 @@ tickersComposer.command("when", async (ctx) => {
     return;
   }
 
-  await ctx.reply(priceList, { parse_mode: "HTML" });
+  await ctx.reply(priceList, htmlReplyOptions);
 });
