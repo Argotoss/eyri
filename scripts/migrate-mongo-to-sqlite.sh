@@ -7,6 +7,12 @@ MONGO_DB="${MONGO_DB:-eyri}"
 MONGO_CONTAINER="${MONGO_CONTAINER:-${1:-}}"
 SQLITE_PATH="${EYRI_DATABASE_PATH:-data/eyri.sqlite}"
 
+if [[ "$SQLITE_PATH" = /* ]]; then
+  SQLITE_ABS_PATH="$SQLITE_PATH"
+else
+  SQLITE_ABS_PATH="$ROOT_DIR/$SQLITE_PATH"
+fi
+
 find_mongo_container() {
   local container
 
@@ -75,12 +81,12 @@ echo "Dumping Mongo database '$MONGO_DB' from container '$MONGO_CONTAINER'..."
 dump_collection user "$TMP_DIR/users.json"
 dump_collection price "$TMP_DIR/prices.json"
 
-mkdir -p "$(dirname "$ROOT_DIR/$SQLITE_PATH")"
+mkdir -p "$(dirname "$SQLITE_ABS_PATH")"
 
 echo "Loading dump into SQLite database '$SQLITE_PATH'..."
 (
   cd "$ROOT_DIR"
-  EYRI_DATABASE_PATH="$SQLITE_PATH" deno run -A \
+  EYRI_DATABASE_PATH="$SQLITE_ABS_PATH" deno run -A \
     scripts/load-mongo-json-to-sqlite.ts \
     --users="$TMP_DIR/users.json" \
     --prices="$TMP_DIR/prices.json"
