@@ -9,7 +9,7 @@ export type TickerDecoration = {
 };
 
 export type TickerDecorations = Record<string, TickerDecoration[]>;
-export type TickerLabelPreferences = Record<string, boolean>;
+export type TickerLabelPreferences = Record<string, string | false>;
 
 type TickerDecorationRow = {
   ticker: string;
@@ -21,7 +21,7 @@ type TickerDecorationRow = {
 
 type TickerLabelPreferenceRow = {
   ticker: string;
-  show_label: number;
+  label: string;
 };
 
 type TableColumn = {
@@ -102,12 +102,88 @@ function createTickerLabelPreferencesTable(db: Database) {
     CREATE TABLE IF NOT EXISTS ticker_label_preferences (
       user_id TEXT NOT NULL,
       ticker TEXT NOT NULL,
-      show_label INTEGER NOT NULL,
+      label TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (user_id, ticker)
     )
   `);
+}
+
+function hasExpectedTickerLabelPreferencesSchema(db: Database) {
+  const columns = getTableColumns(db, "ticker_label_preferences");
+  const primaryKeyColumns = columns
+    .filter((column) => column.pk > 0)
+    .sort((columnA, columnB) => columnA.pk - columnB.pk)
+    .map((column) => column.name);
+
+  return (
+    hasColumn(columns, "user_id") &&
+    hasColumn(columns, "ticker") &&
+    hasColumn(columns, "label") &&
+    primaryKeyColumns.join(",") === "user_id,ticker"
+  );
+}
+
+function migrateTickerLabelPreferencesTable(db: Database) {
+  const columns = getTableColumns(db, "ticker_label_preferences");
+  const hasLabel = hasColumn(columns, "label");
+  const hasShowLabel = hasColumn(columns, "show_label");
+
+  db.exec(`
+    ALTER TABLE ticker_label_preferences RENAME TO ticker_label_preferences_old;
+  `);
+  createTickerLabelPreferencesTable(db);
+
+  if (hasLabel) {
+    db.exec(`
+      INSERT INTO ticker_label_preferences (
+        user_id,
+        ticker,
+        label,
+        created_at,
+        updated_at
+      )
+      SELECT
+        user_id,
+        ticker,
+        label,
+        created_at,
+        updated_at
+      FROM ticker_label_preferences_old;
+
+      DROP TABLE ticker_label_preferences_old;
+    `);
+    return;
+  }
+
+  if (hasShowLabel) {
+    db.exec(`
+      INSERT INTO ticker_label_preferences (
+        user_id,
+        ticker,
+        label,
+        created_at,
+        updated_at
+      )
+      SELECT
+        user_id,
+        ticker,
+        CASE
+          WHEN show_label = 0 THEN 'false'
+          WHEN show_label = 1 THEN ticker
+          ELSE CAST(show_label AS TEXT)
+        END,
+        created_at,
+        updated_at
+      FROM ticker_label_preferences_old;
+
+      DROP TABLE ticker_label_preferences_old;
+    `);
+    return;
+  }
+
+  db.exec("DROP TABLE ticker_label_preferences_old;");
 }
 
 function migrateTickerDecorationsTable(db: Database) {
@@ -151,7 +227,11 @@ function ensureSchema(db: Database) {
     migrateTickerDecorationsTable(db);
   }
 
-  createTickerLabelPreferencesTable(db);
+  if (!tableExists(db, "ticker_label_preferences")) {
+    createTickerLabelPreferencesTable(db);
+  } else if (!hasExpectedTickerLabelPreferencesSchema(db)) {
+    migrateTickerLabelPreferencesTable(db);
+  }
 }
 
 export async function readTickerDecorations(
@@ -233,21 +313,24 @@ export async function readTickerLabelPreferences(
   ensureSchema(db);
   const rows = db
     .prepare(`
-      SELECT ticker, show_label
+      SELECT ticker, label
       FROM ticker_label_preferences
       WHERE user_id = ?
     `)
     .all(String(userId)) as TickerLabelPreferenceRow[];
 
   return Object.fromEntries(
-    rows.map((row) => [normalizeTicker(row.ticker), row.show_label === 1]),
+    rows.map((row) => [
+      normalizeTicker(row.ticker),
+      row.label === "false" ? false : row.label,
+    ]),
   );
 }
 
 export async function setTickerLabelPreference(
   userId: string | number,
   ticker: string,
-  showLabel: boolean,
+  label: string | false,
 ) {
   const db = await getDatabase();
   ensureSchema(db);
@@ -255,12 +338,16 @@ export async function setTickerLabelPreference(
     INSERT INTO ticker_label_preferences (
       user_id,
       ticker,
-      show_label
+      label
     ) VALUES (?, ?, ?)
     ON CONFLICT(user_id, ticker) DO UPDATE SET
-      show_label = excluded.show_label,
+      label = excluded.label,
       updated_at = CURRENT_TIMESTAMP
-  `).run(String(userId), normalizeTicker(ticker), showLabel ? 1 : 0);
+  `).run(
+    String(userId),
+    normalizeTicker(ticker),
+    label === false ? "false" : label,
+  );
 }
 
 export function escapeHtml(value: string) {
@@ -294,19 +381,18 @@ export function formatDecoratedTicker(
   labelPreferences?: TickerLabelPreferences,
 ) {
   const normalizedTicker = normalizeTicker(ticker);
-  const escapedTicker = escapeHtml(ticker);
+  const labelPreference = labelPreferences?.[normalizedTicker];
+  const label = labelPreference === false ? null : (labelPreference ?? ticker);
   const tickerDecorations = decorations?.[normalizedTicker];
   const decorated =
     tickerDecorations && tickerDecorations.length > 0
       ? formatTickerDecorations(tickerDecorations)
       : null;
   if (!decorated) {
-    return escapedTicker;
+    return label === null ? "" : escapeHtml(label);
   }
 
-  return labelPreferences?.[normalizedTicker] === false
-    ? decorated
-    : `${decorated} ${escapedTicker}`;
+  return label === null ? decorated : `${decorated} ${escapeHtml(label)}`;
 }
 
 export function parseDecorateCommand(ctx: CustomContext): {
@@ -396,15 +482,22 @@ export function parseDecorateCommand(ctx: CustomContext): {
 
 export function parseLabelCommand(input: string): {
   ticker: string;
-  showLabel: boolean;
+  label: string | false;
 } | null {
-  const [ticker, showLabel] = input.trim().split(/\s+/);
-  if (!ticker || (showLabel !== "true" && showLabel !== "false")) {
+  const trimmedInput = input.trim();
+  const tickerMatch = trimmedInput.match(/^\S+/);
+  if (!tickerMatch) {
+    return null;
+  }
+
+  const ticker = tickerMatch[0];
+  const label = trimmedInput.slice(ticker.length).trim();
+  if (!label) {
     return null;
   }
 
   return {
     ticker: normalizeTicker(ticker),
-    showLabel: showLabel === "true",
+    label: label === "false" ? false : label,
   };
 }

@@ -82,13 +82,12 @@ tickersComposer.command("label", async (ctx) => {
     return;
   }
 
-  await setTickerLabelPreference(ctx.from.id, parsed.ticker, parsed.showLabel);
-  await ctx.reply(
-    `${escapeHtml(parsed.ticker)} label ${
-      parsed.showLabel ? "shown" : "hidden"
-    }.`,
-    { parse_mode: "HTML" },
-  );
+  await setTickerLabelPreference(ctx.from.id, parsed.ticker, parsed.label);
+  const labelStatus =
+    parsed.label === false ? "hidden" : `set to ${escapeHtml(parsed.label)}`;
+  await ctx.reply(`${escapeHtml(parsed.ticker)} label ${labelStatus}.`, {
+    parse_mode: "HTML",
+  });
 });
 
 tickersComposer.command("tickers", async (ctx) => {

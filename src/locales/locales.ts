@@ -13,6 +13,6 @@ export const locales: Record<string, Record<string, string>> = {
     decorate:
       `To decorate a ticker, use this format:\n\n<code>/decorate TICKER EMOJI</code>`,
     label:
-      `To show or hide a ticker label, use this format:\n\n<code>/label TICKER true|false</code>`,
+      `To set or hide a ticker label, use this format:\n\n<code>/label TICKER LABEL</code>\n\nUse <code>false</code> as the label to hide it.`,
   },
 };
