@@ -1,5 +1,6 @@
 import { Composer } from "grammy";
 import type { CustomContext } from "../bot/types.ts";
+import { loadMongoUsers } from "../database/load.ts";
 import { refreshPersistentPrice } from "../database/price.ts";
 import { addPosition } from "../database/user.ts";
 import {
@@ -19,6 +20,37 @@ import {
 } from "./portfolio.ts";
 
 export const tickersComposer = new Composer<CustomContext>();
+
+function readLoadInput(ctx: CustomContext) {
+  const commandInput = typeof ctx.match === "string" ? ctx.match.trim() : "";
+  if (commandInput) {
+    return commandInput;
+  }
+
+  const replyToMessage = ctx.message?.reply_to_message;
+  if (!replyToMessage) {
+    return null;
+  }
+
+  if ("text" in replyToMessage && replyToMessage.text) {
+    return replyToMessage.text;
+  }
+
+  if ("caption" in replyToMessage && replyToMessage.caption) {
+    return replyToMessage.caption;
+  }
+
+  return null;
+}
+
+function isLoadAllowed(ctx: CustomContext) {
+  const adminId = Deno.env.get("ADMIN_ID");
+  if (!adminId) {
+    return true;
+  }
+
+  return String(ctx.from?.id) === adminId;
+}
 
 tickersComposer.command("buy", async (ctx) => {
   if (!ctx.dbEntities.user) {
@@ -56,6 +88,33 @@ tickersComposer.command("buy", async (ctx) => {
   await refreshPersistentPrice(ctx.db, ticker);
 });
 
+tickersComposer.command("load", async (ctx) => {
+  if (!isLoadAllowed(ctx)) {
+    return;
+  }
+
+  const input = readLoadInput(ctx);
+  if (!input) {
+    await ctx.text("load");
+    return;
+  }
+
+  try {
+    const result = loadMongoUsers(ctx.db, input);
+    await ctx.reply(
+      [
+        `Loaded ${result.importedUsers} users.`,
+        `Loaded ${result.importedPositions} positions.`,
+        `Skipped ${result.skippedUsers} users.`,
+        `Skipped ${result.skippedPositions} positions.`,
+      ].join("\n"),
+    );
+  } catch (error) {
+    console.error("Failed to load Mongo JSON:", error);
+    await ctx.text("load");
+  }
+});
+
 tickersComposer.command("decorate", async (ctx) => {
   const parsed = parseDecorateCommand(ctx);
   if (!parsed || !ctx.from) {
@@ -65,9 +124,11 @@ tickersComposer.command("decorate", async (ctx) => {
 
   await setTickerDecoration(ctx.from.id, parsed.ticker, parsed.decorations);
   await ctx.reply(
-    `${formatTickerDecorations(parsed.decorations)} ${escapeHtml(
-      parsed.ticker,
-    )} decorated (${parsed.decorations.length}).`,
+    `${formatTickerDecorations(parsed.decorations)} ${
+      escapeHtml(
+        parsed.ticker,
+      )
+    } decorated (${parsed.decorations.length}).`,
     { parse_mode: "HTML" },
   );
 });
@@ -81,7 +142,9 @@ tickersComposer.command("label", async (ctx) => {
 
   await setTickerLabelPreference(ctx.from.id, parsed.ticker, parsed.showLabel);
   await ctx.reply(
-    `${escapeHtml(parsed.ticker)} label ${parsed.showLabel ? "shown" : "hidden"}.`,
+    `${escapeHtml(parsed.ticker)} label ${
+      parsed.showLabel ? "shown" : "hidden"
+    }.`,
     { parse_mode: "HTML" },
   );
 });
