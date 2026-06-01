@@ -10,8 +10,6 @@ export const locales: Record<string, Record<string, string>> = {
       `You don't have any positions yet.\n\nUse /buy to add a position purchase item.`,
     when:
       `To see hypothetical performance, use this format:\n\n<code>/when TICKER=price TICKER2=price2 ...</code>`,
-    load:
-      `Reply to old Mongo user JSON with <code>/load</code>, or send <code>/load JSON</code>.`,
     decorate:
       `To decorate a ticker, use this format:\n\n<code>/decorate TICKER EMOJI</code>`,
     label:
