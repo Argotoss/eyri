@@ -21,7 +21,7 @@ SQLITE_CONTAINER_PATH="${SQLITE_CONTAINER_PATH:-/app/data/eyri.sqlite}"
 MONGO_IMAGE="${MONGO_IMAGE:-docker.io/library/mongo:7}"
 DENO_IMAGE="${DENO_IMAGE:-docker.io/denoland/deno:2.5.4}"
 CREATED_MONGO_CONTAINER=""
-SQLITE_ABS_PATH="/home/kitkat/.local/share/containers/storage/volumes/eyri_eyri-data/_data/eyri.sqlite"
+SQLITE_ABS_PATH="/var/home/kitkat/.local/share/containers/storage/volumes/eyri_eyri-data/_data/eyri.sqlite"
 SQLITE_PATH="$SQLITE_ABS_PATH"
 
 BIND_MOUNT_SUFFIX=""
@@ -242,6 +242,20 @@ dump_collection() {
   " >"$output"
 }
 
+print_sqlite_file_state() {
+  local label="$1"
+
+  echo "$label"
+  if [[ -e "$SQLITE_ABS_PATH" ]]; then
+    ls -li "$SQLITE_ABS_PATH"
+    sha256sum "$SQLITE_ABS_PATH"
+  else
+    echo "missing: $SQLITE_ABS_PATH"
+  fi
+}
+
+print_sqlite_file_state "SQLite file before migration:"
+
 echo "Dumping Mongo database '$MONGO_DB' from container '$MONGO_CONTAINER'..."
 dump_collection user "$TMP_DIR/users.json"
 dump_collection price "$TMP_DIR/prices.json"
@@ -279,5 +293,7 @@ else
       --users=/dump/users.json \
       --prices=/dump/prices.json
 fi
+
+print_sqlite_file_state "SQLite file after migration:"
 
 echo "Migration complete."

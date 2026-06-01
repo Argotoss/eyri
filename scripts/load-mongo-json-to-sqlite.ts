@@ -1,4 +1,5 @@
 import { connectToDb } from "../src/modules/database/setup.ts";
+import { Database as SqliteDatabase } from "@db/sqlite";
 
 type MongoUser = {
   userId?: unknown;
@@ -102,12 +103,20 @@ function getArg(name: string) {
   return value.slice(prefix.length);
 }
 
-function readPositionRows() {
-  return database.prepare(`
+function readPositionRows(db: SqliteDatabase) {
+  return db.prepare(`
     SELECT user_id, ticker, amount, price, date
     FROM positions
     ORDER BY user_id, date, id
   `).all() as PositionDebugRow[];
+}
+
+function readCounts(db: SqliteDatabase) {
+  return {
+    users: db.prepare("SELECT count(*) AS count FROM users").get(),
+    positions: db.prepare("SELECT count(*) AS count FROM positions").get(),
+    prices: db.prepare("SELECT count(*) AS count FROM prices").get(),
+  };
 }
 
 const usersPath = getArg("users");
@@ -115,14 +124,17 @@ const pricesPath = getArg("prices");
 const users = await readJsonArray<MongoUser>(usersPath);
 const prices = await readJsonArray<MongoPrice>(pricesPath);
 const database = await connectToDb();
+const databasePath = Deno.env.get("EYRI_DATABASE_PATH");
 
-console.log("SQLite database path:", Deno.env.get("EYRI_DATABASE_PATH"));
+console.log("SQLite database path:", databasePath);
 console.log("JSON users data:");
 console.log(JSON.stringify(users, null, 2));
 console.log("JSON prices data:");
 console.log(JSON.stringify(prices, null, 2));
+console.log("Fetched counts now from SQLite:");
+console.log(JSON.stringify(readCounts(database), null, 2));
 console.log("Fetched positions now from SQLite:");
-console.log(JSON.stringify(readPositionRows(), null, 2));
+console.log(JSON.stringify(readPositionRows(database), null, 2));
 
 let importedUsers = 0;
 let importedPositions = 0;
@@ -208,13 +220,27 @@ try {
   }
 
   database.exec("COMMIT");
+  console.log("Fetched counts after insertion:");
+  console.log(JSON.stringify(readCounts(database), null, 2));
   console.log("Fetched positions after insertion:");
-  console.log(JSON.stringify(readPositionRows(), null, 2));
+  console.log(JSON.stringify(readPositionRows(database), null, 2));
 } catch (error) {
   database.exec("ROLLBACK");
   throw error;
 } finally {
   database.close();
+}
+
+if (databasePath) {
+  const reopenedDatabase = new SqliteDatabase(databasePath);
+  try {
+    console.log("Fetched counts after close/reopen:");
+    console.log(JSON.stringify(readCounts(reopenedDatabase), null, 2));
+    console.log("Fetched positions after close/reopen:");
+    console.log(JSON.stringify(readPositionRows(reopenedDatabase), null, 2));
+  } finally {
+    reopenedDatabase.close();
+  }
 }
 
 console.log(
