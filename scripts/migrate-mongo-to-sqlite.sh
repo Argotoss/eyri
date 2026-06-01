@@ -21,8 +21,8 @@ SQLITE_CONTAINER_PATH="${SQLITE_CONTAINER_PATH:-/app/data/eyri.sqlite}"
 MONGO_IMAGE="${MONGO_IMAGE:-docker.io/library/mongo:7}"
 DENO_IMAGE="${DENO_IMAGE:-docker.io/denoland/deno:2.5.4}"
 CREATED_MONGO_CONTAINER=""
-SQLITE_ABS_PATH="/var/home/kitkat/.local/share/containers/storage/volumes/eyri_eyri-data/_data/eyri.sqlite"
-SQLITE_PATH="$SQLITE_ABS_PATH"
+SQLITE_ABS_PATH="${EYRI_DATABASE_PATH:-}"
+SQLITE_PATH=""
 
 BIND_MOUNT_SUFFIX=""
 if [[ "$CONTAINER_RUNTIME" == *podman* ]]; then
@@ -165,7 +165,25 @@ if [[ -z "$MONGO_CONTAINER" && -z "$MONGO_VOLUME" ]]; then
   MONGO_VOLUME="$(find_old_mongo_volume)"
 fi
 
-echo "Using hardcoded SQLite database: $SQLITE_ABS_PATH"
+if [[ -z "$APP_CONTAINER" ]]; then
+  APP_CONTAINER="$(find_app_container)"
+fi
+
+if [[ -z "$SQLITE_ABS_PATH" ]]; then
+  if [[ -n "$APP_CONTAINER" ]] && container_exists "$APP_CONTAINER"; then
+    SQLITE_DIR="$(find_container_mount_source "$APP_CONTAINER" "/app/data")"
+    if [[ -z "$SQLITE_DIR" ]]; then
+      echo "Could not find the /app/data mount source for app container '$APP_CONTAINER'." >&2
+      exit 1
+    fi
+    SQLITE_ABS_PATH="$SQLITE_DIR/eyri.sqlite"
+  else
+    SQLITE_ABS_PATH="$(find_sqlite_path)"
+  fi
+fi
+SQLITE_PATH="$SQLITE_ABS_PATH"
+
+echo "Using SQLite database: $SQLITE_ABS_PATH"
 
 cleanup() {
   if [[ -n "$CREATED_MONGO_CONTAINER" ]]; then
