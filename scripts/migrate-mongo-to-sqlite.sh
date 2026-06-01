@@ -2,20 +2,22 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-docker}"
+if [[ -z "${CONTAINER_RUNTIME:-}" ]]; then
+  if command -v docker >/dev/null 2>&1; then
+    CONTAINER_RUNTIME="docker"
+  elif command -v podman >/dev/null 2>&1; then
+    CONTAINER_RUNTIME="podman"
+  else
+    CONTAINER_RUNTIME="docker"
+  fi
+fi
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(basename "$ROOT_DIR")}"
 MONGO_DB="${MONGO_DB:-eyri}"
 MONGO_CONTAINER="${MONGO_CONTAINER:-${1:-}}"
 MONGO_VOLUME="${MONGO_VOLUME:-}"
 MONGO_IMAGE="${MONGO_IMAGE:-docker.io/library/mongo:7}"
-SQLITE_PATH="${EYRI_DATABASE_PATH:-data/eyri.sqlite}"
 DENO_IMAGE="${DENO_IMAGE:-docker.io/denoland/deno:2.5.4}"
 CREATED_MONGO_CONTAINER=""
-
-if [[ "$SQLITE_PATH" = /* ]]; then
-  SQLITE_ABS_PATH="$SQLITE_PATH"
-else
-  SQLITE_ABS_PATH="$ROOT_DIR/$SQLITE_PATH"
-fi
 
 find_mongo_container() {
   local container
@@ -40,8 +42,70 @@ if ! command -v "$CONTAINER_RUNTIME" >/dev/null 2>&1; then
   exit 1
 fi
 
+volume_exists() {
+  "$CONTAINER_RUNTIME" volume inspect "$1" >/dev/null 2>&1
+}
+
+volume_mountpoint() {
+  "$CONTAINER_RUNTIME" volume inspect "$1" --format '{{.Mountpoint}}'
+}
+
+find_old_mongo_volume() {
+  local candidates=(
+    "${COMPOSE_PROJECT_NAME}_eyri-mongo-data"
+    "eyri_eyri-mongo-data"
+    "eyri-mongo-data"
+  )
+  local volume
+
+  for volume in "${candidates[@]}"; do
+    if volume_exists "$volume"; then
+      printf '%s\n' "$volume"
+      return
+    fi
+  done
+
+  "$CONTAINER_RUNTIME" volume ls --format '{{.Name}}' \
+    | grep -E '(^|_)eyri-mongo-data$' \
+    | head -n 1 || true
+}
+
+find_sqlite_path() {
+  if [[ -n "${EYRI_DATABASE_PATH:-}" ]]; then
+    if [[ "$EYRI_DATABASE_PATH" = /* ]]; then
+      printf '%s\n' "$EYRI_DATABASE_PATH"
+    else
+      printf '%s/%s\n' "$ROOT_DIR" "$EYRI_DATABASE_PATH"
+    fi
+    return
+  fi
+
+  local candidates=(
+    "${COMPOSE_PROJECT_NAME}_eyri-data"
+    "eyri_eyri-data"
+    "eyri-data"
+  )
+  local volume
+
+  for volume in "${candidates[@]}"; do
+    if volume_exists "$volume"; then
+      printf '%s/eyri.sqlite\n' "$(volume_mountpoint "$volume")"
+      return
+    fi
+  done
+
+  printf '%s/data/eyri.sqlite\n' "$ROOT_DIR"
+}
+
+SQLITE_ABS_PATH="$(find_sqlite_path)"
+SQLITE_PATH="${EYRI_DATABASE_PATH:-$SQLITE_ABS_PATH}"
+
 if [[ -z "$MONGO_CONTAINER" && -z "$MONGO_VOLUME" ]]; then
   MONGO_CONTAINER="$(find_mongo_container)"
+fi
+
+if [[ -z "$MONGO_CONTAINER" && -z "$MONGO_VOLUME" ]]; then
+  MONGO_VOLUME="$(find_old_mongo_volume)"
 fi
 
 TMP_DIR="$(mktemp -d)"
@@ -85,10 +149,13 @@ if [[ -z "$MONGO_CONTAINER" ]]; then
     cat >&2 <<'USAGE'
 Could not find a running Mongo container.
 
+Default behavior:
+  Uses the old Compose volume '${COMPOSE_PROJECT_NAME}_eyri-mongo-data' when it exists.
+
 Usage with an existing running Mongo container:
   scripts/migrate-mongo-to-sqlite.sh <mongo-container-name>
 
-Usage with only the old Compose volume:
+Usage with a non-standard old Compose volume:
   MONGO_VOLUME=<old-mongo-volume> scripts/migrate-mongo-to-sqlite.sh
 
 Environment:
