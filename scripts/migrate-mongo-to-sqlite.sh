@@ -19,6 +19,11 @@ MONGO_IMAGE="${MONGO_IMAGE:-docker.io/library/mongo:7}"
 DENO_IMAGE="${DENO_IMAGE:-docker.io/denoland/deno:2.5.4}"
 CREATED_MONGO_CONTAINER=""
 
+BIND_MOUNT_SUFFIX=""
+if [[ "$CONTAINER_RUNTIME" == *podman* ]]; then
+  BIND_MOUNT_SUFFIX=",Z"
+fi
+
 find_mongo_container() {
   local container
 
@@ -210,9 +215,9 @@ else
   SQLITE_FILE="$(basename "$SQLITE_ABS_PATH")"
 
   "$CONTAINER_RUNTIME" run --rm \
-    -v "$ROOT_DIR:/app" \
-    -v "$TMP_DIR:/dump" \
-    -v "$SQLITE_DIR:/sqlite" \
+    -v "$ROOT_DIR:/app:ro${BIND_MOUNT_SUFFIX}" \
+    -v "$TMP_DIR:/dump:ro${BIND_MOUNT_SUFFIX}" \
+    -v "$SQLITE_DIR:/sqlite${BIND_MOUNT_SUFFIX}" \
     -w /app \
     -e "EYRI_DATABASE_PATH=/sqlite/$SQLITE_FILE" \
     "$DENO_IMAGE" \
