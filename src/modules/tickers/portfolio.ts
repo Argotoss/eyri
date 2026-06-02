@@ -1,7 +1,11 @@
 import { formatMoneyChange } from "../../utils/money.ts";
 import { getPrices, refreshPersistentPrice } from "../database/price.ts";
 import type { Database } from "../database/setup.ts";
-import { getPositions, type User } from "../database/user.ts";
+import {
+  getPortfolioSummary,
+  getPositionSummaries,
+  type User,
+} from "../database/user.ts";
 import {
   formatDecoratedTicker,
   type TickerDecorations,
@@ -25,14 +29,9 @@ type BuildHistoryArgs = {
   tickerLabelLinks?: TickerLabelLinks;
 };
 
-type TickerPositionSummary = {
-  amount: number;
-  cost: number;
-  oldestDate?: Date;
-};
-
 const formatMoney = (value: number) => `$${value.toFixed(2)}`;
 const formatAmount = (value: number) => value.toFixed(2);
+const formatSignedMoney = (value: number) => formatMoneyChange(value);
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 const DAYS_PER_MONTH = 365.2425 / 12;
 
@@ -66,20 +65,9 @@ function toDate(value: Date | string) {
   return value instanceof Date ? value : new Date(value);
 }
 
-function getTickerPositionSummaries(user: User) {
-  return user.positions.reduce(
-    (list, position) => {
-      const ticker = position.ticker;
-      const positionDate = toDate(position.date);
-      list[ticker] ??= { amount: 0, cost: 0 };
-      list[ticker].amount += position.amount;
-      list[ticker].cost += position.price;
-      if (!list[ticker].oldestDate || positionDate < list[ticker].oldestDate) {
-        list[ticker].oldestDate = positionDate;
-      }
-      return list;
-    },
-    {} as Record<string, TickerPositionSummary>,
+function openPositionEntries(user: User) {
+  return Object.entries(getPositionSummaries(user)).filter(
+    ([, position]) => position.amount > 0,
   );
 }
 
@@ -95,87 +83,69 @@ export async function buildTickerList({
     return "";
   }
 
-  const tickers = user.positions.map((position) => position.ticker);
+  const positionSummaries = getPositionSummaries(user);
+  const positions = Object.entries(positionSummaries).filter(
+    ([, position]) => position.amount > 0,
+  );
+  const portfolioSummary = getPortfolioSummary(user);
+  const tickers = positions.map(([ticker]) => ticker);
   await Promise.all(
     [...new Set(tickers)].map((ticker) =>
-      refreshPersistentPrice(database, ticker)
+      refreshPersistentPrice(database, ticker),
     ),
   );
 
   const prices = await getPrices(database, tickers);
-  const positions = getPositions(user);
   const now = new Date();
-  const earliestDatesByTicker = user.positions.reduce(
-    (list, position) => {
-      const ticker = position.ticker;
-      const positionDate = toDate(position.date);
-      const previousDate = list[ticker];
-      if (!previousDate || positionDate < previousDate) {
-        list[ticker] = positionDate;
-      }
-      return list;
-    },
-    {} as Record<string, Date>,
-  );
-  const earliestPortfolioDate = Object.values(earliestDatesByTicker).reduce(
-    (earliest, date) => (!earliest || date < earliest ? date : earliest),
-    null as Date | null,
-  );
 
-  const tickerLines = Object.entries(positions).map(
-    ([ticker, { amount, cost }]) => {
-      const tickerName = formatDecoratedTicker(
-        ticker,
-        tickerDecorations,
-        tickerLabelPreferences,
-        tickerLabelLinks,
-      );
-      const currentPrice = priceOverrides?.[ticker] ?? prices[ticker]?.price;
-      const oldestDate = earliestDatesByTicker[ticker];
-      const elapsedPeriod = getElapsedPeriod(oldestDate, now);
-      const totalInput = cost;
-      const averageUnitPrice = amount === 0 ? 0 : totalInput / amount;
-      if (currentPrice === undefined || currentPrice === null) {
-        return [
-          `${tickerName} ? ?`,
-          `${formatMoney(averageUnitPrice)} x ${formatAmount(amount)} (? ?)`,
-          `${formatMoney(totalInput)} -> ? x ${elapsedPeriod.label}`,
-        ].join("\n");
-      }
-
-      const totalNow = amount * currentPrice;
-      const totalChange = totalNow - totalInput;
-      const totalPercentageChange = totalInput === 0
-        ? 0
-        : (totalChange / totalInput) * 100;
-      const currentVsAverageChange = currentPrice - averageUnitPrice;
-
+  const tickerLines = positions.map(([ticker, { amount, cost }]) => {
+    const tickerName = formatDecoratedTicker(
+      ticker,
+      tickerDecorations,
+      tickerLabelPreferences,
+      tickerLabelLinks,
+    );
+    const currentPrice = priceOverrides?.[ticker] ?? prices[ticker]?.price;
+    const oldestDate = positionSummaries[ticker]?.oldestDate;
+    const elapsedPeriod = getElapsedPeriod(oldestDate, now);
+    const totalInput = cost;
+    const averageUnitPrice = amount === 0 ? 0 : totalInput / amount;
+    if (currentPrice === undefined || currentPrice === null) {
       return [
-        `${tickerName} ${formatMoneyChange(totalChange)} ${
-          formatMoneyChange(
-            totalPercentageChange,
-            "%",
-          )
-        }`,
-        `${formatMoney(averageUnitPrice)} x ${formatAmount(amount)} (${
-          formatMoney(
-            currentPrice,
-          )
-        } ${formatMoneyChange(currentVsAverageChange)})`,
-        `${formatMoney(totalInput)} -> ${
-          formatMoney(
-            totalNow,
-          )
-        } x ${elapsedPeriod.label}`,
+        `${tickerName} ? ?`,
+        `${formatMoney(averageUnitPrice)} x ${formatAmount(amount)} (? ?)`,
+        `${formatMoney(totalInput)} -> ? x ${elapsedPeriod.label}`,
       ].join("\n");
-    },
-  );
+    }
 
-  const portfolioElapsedPeriod = getElapsedPeriod(earliestPortfolioDate, now);
-  const portfolioTotals = Object.entries(positions).reduce(
+    const totalNow = amount * currentPrice;
+    const totalChange = totalNow - totalInput;
+    const totalPercentageChange =
+      totalInput === 0 ? 0 : (totalChange / totalInput) * 100;
+    const currentVsAverageChange = currentPrice - averageUnitPrice;
+
+    return [
+      `${tickerName} ${formatMoneyChange(totalChange)} ${formatMoneyChange(
+        totalPercentageChange,
+        "%",
+      )}`,
+      `${formatMoney(averageUnitPrice)} x ${formatAmount(amount)} (${formatMoney(
+        currentPrice,
+      )} ${formatMoneyChange(currentVsAverageChange)})`,
+      `${formatMoney(totalInput)} -> ${formatMoney(
+        totalNow,
+      )} x ${elapsedPeriod.label}`,
+    ].join("\n");
+  });
+
+  const portfolioElapsedPeriod = getElapsedPeriod(
+    portfolioSummary.firstTransactionDate,
+    now,
+  );
+  const portfolioTotals = positions.reduce(
     (totals, [ticker, { amount, cost }]) => {
       const currentPrice = priceOverrides?.[ticker] ?? prices[ticker]?.price;
-      totals.totalInput += cost;
+      totals.openCost += cost;
       if (currentPrice === undefined || currentPrice === null) {
         totals.hasMissingPrice = true;
         return totals;
@@ -184,31 +154,36 @@ export async function buildTickerList({
       totals.totalNow += amount * currentPrice;
       return totals;
     },
-    { totalInput: 0, totalNow: 0, hasMissingPrice: false },
+    { openCost: 0, totalNow: 0, hasMissingPrice: false },
   );
 
-  const totalSummary = portfolioTotals.hasMissingPrice ? "? ? / ? ?" : (() => {
-    const totalChange = portfolioTotals.totalNow - portfolioTotals.totalInput;
-    const totalPercentageChange = portfolioTotals.totalInput === 0
-      ? 0
-      : (totalChange / portfolioTotals.totalInput) * 100;
-    const monthlyChange = totalChange / portfolioElapsedPeriod.months;
-    const monthlyPercentageChange = totalPercentageChange /
-      portfolioElapsedPeriod.months;
-    return `${formatMoneyChange(totalChange)} ${
-      formatMoneyChange(
-        totalPercentageChange,
-        "%",
-      )
-    } / ${formatMoneyChange(monthlyChange)} ${
-      formatMoneyChange(
-        monthlyPercentageChange,
-        "%",
-      )
-    } (${portfolioElapsedPeriod.label})`;
-  })();
+  const totalSummary = portfolioTotals.hasMissingPrice
+    ? `? ? / ? ? (${portfolioElapsedPeriod.label})`
+    : (() => {
+        const unrealizedChange =
+          portfolioTotals.totalNow - portfolioTotals.openCost;
+        const totalChange = unrealizedChange + portfolioSummary.realizedPl;
+        const totalBasis =
+          portfolioTotals.openCost + portfolioSummary.realizedCostBasis;
+        const totalPercentageChange =
+          totalBasis === 0 ? 0 : (totalChange / totalBasis) * 100;
+        const monthlyChange = totalChange / portfolioElapsedPeriod.months;
+        const monthlyPercentageChange =
+          totalPercentageChange / portfolioElapsedPeriod.months;
+        return `${formatMoneyChange(totalChange)} ${formatMoneyChange(
+          totalPercentageChange,
+          "%",
+        )} / ${formatMoneyChange(monthlyChange)} ${formatMoneyChange(
+          monthlyPercentageChange,
+          "%",
+        )} (${portfolioElapsedPeriod.label})`;
+      })();
 
-  return [...tickerLines, totalSummary].join("\n\n");
+  const realizedLine =
+    Math.abs(portfolioSummary.realizedPl) > 0.005
+      ? [`Realized: ${formatSignedMoney(portfolioSummary.realizedPl)}`]
+      : [];
+  return [...tickerLines, ...realizedLine, totalSummary].join("\n\n");
 }
 
 export async function buildPerformanceList({
@@ -223,31 +198,23 @@ export async function buildPerformanceList({
     return "";
   }
 
-  const tickers = user.positions.map((position) => position.ticker);
+  const positions = openPositionEntries(user);
+  const portfolioSummary = getPortfolioSummary(user);
+  const tickers = positions.map(([ticker]) => ticker);
   await Promise.all(
     [...new Set(tickers)].map((ticker) =>
-      refreshPersistentPrice(database, ticker)
+      refreshPersistentPrice(database, ticker),
     ),
   );
 
   const prices = await getPrices(database, tickers);
-  const positions = getTickerPositionSummaries(user);
   const now = new Date();
-  const earliestPortfolioDate = Object.values(positions).reduce(
-    (earliest, position) =>
-      !position.oldestDate
-        ? earliest
-        : !earliest || position.oldestDate < earliest
-        ? position.oldestDate
-        : earliest,
-    null as Date | null,
-  );
 
   let totalInput = 0;
   let totalNow = 0;
   let hasMissingPrice = false;
 
-  const lines = Object.entries(positions).map(([ticker, position]) => {
+  const lines = positions.map(([ticker, position]) => {
     const tickerName = formatDecoratedTicker(
       ticker,
       tickerDecorations,
@@ -265,34 +232,31 @@ export async function buildPerformanceList({
 
     const tickerTotalNow = position.amount * currentPrice;
     const change = tickerTotalNow - position.cost;
-    const percentageChange = position.cost === 0
-      ? 0
-      : (change / position.cost) * 100;
+    const percentageChange =
+      position.cost === 0 ? 0 : (change / position.cost) * 100;
     totalNow += tickerTotalNow;
 
-    return `${tickerName} ${
-      formatMoneyChange(
-        percentageChange,
-        "%",
-      )
-    } ${formatMoneyChange(change)} (${elapsedPeriod.label})`;
+    return `${tickerName} ${formatMoneyChange(
+      percentageChange,
+      "%",
+    )} ${formatMoneyChange(change)} (${elapsedPeriod.label})`;
   });
 
-  const portfolioElapsedPeriod = getElapsedPeriod(earliestPortfolioDate, now);
+  const portfolioElapsedPeriod = getElapsedPeriod(
+    portfolioSummary.firstTransactionDate,
+    now,
+  );
   const totalLine = hasMissingPrice
     ? `Total: ? ? (${portfolioElapsedPeriod.label})`
     : (() => {
-      const change = totalNow - totalInput;
-      const percentageChange = totalInput === 0
-        ? 0
-        : (change / totalInput) * 100;
-      return `Total: ${
-        formatMoneyChange(
+        const change = totalNow - totalInput + portfolioSummary.realizedPl;
+        const basis = totalInput + portfolioSummary.realizedCostBasis;
+        const percentageChange = basis === 0 ? 0 : (change / basis) * 100;
+        return `Total: ${formatMoneyChange(
           percentageChange,
           "%",
-        )
-      } ${formatMoneyChange(change)} (${portfolioElapsedPeriod.label})`;
-    })();
+        )} ${formatMoneyChange(change)} (${portfolioElapsedPeriod.label})`;
+      })();
 
   return [...lines, totalLine].join("\n\n");
 }
@@ -319,27 +283,30 @@ export function buildHistory({
   for (const position of sorted) {
     const date = toDate(position.date);
     const year = date.getFullYear();
-    const unitPrice = position.amount === 0
-      ? 0
-      : position.price / position.amount;
+    const unitPrice =
+      position.unitPrice ??
+      (position.amount === 0 ? 0 : Math.abs(position.price / position.amount));
     const tickerName = formatDecoratedTicker(
       position.ticker,
       tickerDecorations,
       tickerLabelPreferences,
       tickerLabelLinks,
     );
-    const line = `${pad(date.getDate())}.${
-      pad(
-        date.getMonth() + 1,
-      )
-    } ${tickerName} ${position.amount.toFixed(4)} x $${
-      unitPrice.toFixed(
-        2,
-      )
-    } ($${position.price.toFixed(0)})`;
+    const isSell = position.amount < 0 || position.kind === "sell";
+    const totalCost = isSell
+      ? (position.netCashFlow ?? position.price)
+      : (position.grossValue ?? position.price) + position.commissionAmount;
+    const realized = isSell ? ` ${formatSignedMoney(position.realizedPl)}` : "";
+    const line = `${pad(date.getDate())}.${pad(
+      date.getMonth() + 1,
+    )} ${isSell ? "SELL" : "BUY"} ${tickerName} ${Math.abs(position.amount).toFixed(4)} x $${unitPrice.toFixed(
+      2,
+    )} ($${totalCost.toFixed(0)}${realized})`;
     const group = grouped.get(year) ?? { lines: [], total: 0 };
     group.lines.push(line);
-    group.total += position.price;
+    if (!isSell) {
+      group.total += totalCost;
+    }
     grouped.set(year, group);
   }
 

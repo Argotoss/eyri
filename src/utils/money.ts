@@ -3,5 +3,5 @@ export function formatMoneyChange(
   kind: "%" | "$" = "$",
   points = 2,
 ) {
-  return `${change > 0 ? "+" : "-"}${kind === "$" ? "$" : ""}${Math.abs(change).toFixed(points)}${kind === "%" ? "%" : ""}`;
+  return `${change >= 0 ? "+" : "-"}${kind === "$" ? "$" : ""}${Math.abs(change).toFixed(points)}${kind === "%" ? "%" : ""}`;
 }

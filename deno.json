@@ -1,6 +1,7 @@
 {
   "tasks": {
     "dev": "deno run --watch --env-file=.env -A src/main.ts",
+    "test": "deno test -A",
     "format": "deno run -A @biomejs/biome format src --write; deno run -A @biomejs/biome lint src --write"
   },
   "imports": {

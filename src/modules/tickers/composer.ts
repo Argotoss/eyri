@@ -1,7 +1,7 @@
 import { Composer } from "grammy";
 import type { CustomContext } from "../bot/types.ts";
 import { refreshPersistentPrice } from "../database/price.ts";
-import { addPosition } from "../database/user.ts";
+import { recordPurchase } from "../database/user.ts";
 import {
   escapeHtml,
   formatTickerDecorations,
@@ -21,6 +21,11 @@ import {
   buildTickerList,
   parsePriceOverrides,
 } from "./portfolio.ts";
+import {
+  formatPurchaseResult,
+  parseLegacyBuyCommand,
+  parsePurchaseCommand,
+} from "./purchase.ts";
 
 export const tickersComposer = new Composer<CustomContext>();
 
@@ -42,29 +47,83 @@ tickersComposer.command("buy", async (ctx) => {
     return;
   }
 
-  const params = ctx.match.split(" ");
-  if (params.length !== 4) {
+  const parsed = parseLegacyBuyCommand(ctx.match);
+  if (!parsed) {
     await ctx.text("buy");
     return;
   }
 
-  const [ticker, price, commission, amount] = params;
-
-  const result = await addPosition({
+  const result = await recordPurchase({
     database: ctx.db,
     userId: ctx.dbEntities.user.userId,
-    ticker,
-    price: Number(price) + Number(commission),
-    amount: Number(amount),
+    ticker: parsed.ticker,
+    unitPrice: parsed.unitPrice,
+    amount: parsed.amount,
+    commissionPercent: parsed.commissionPercent,
   });
 
   if (!result.success) {
-    await ctx.text("buy");
+    await ctx.reply(
+      escapeHtml(result.error ?? "Failed to add position"),
+      htmlReplyOptions,
+    );
+    return;
+  }
+  if (!result.data) {
+    await ctx.reply(escapeHtml("Failed to add position"), htmlReplyOptions);
     return;
   }
 
-  await ctx.text("bought");
-  await refreshPersistentPrice(ctx.db, ticker);
+  await ctx.reply(
+    escapeHtml(formatPurchaseResult(result.data)),
+    htmlReplyOptions,
+  );
+  await refreshPersistentPrice(ctx.db, parsed.ticker);
+});
+
+tickersComposer.command("purchase", async (ctx) => {
+  if (!ctx.dbEntities.user) {
+    await ctx.text("start");
+    return;
+  }
+
+  if (!ctx.match) {
+    await ctx.text("purchase");
+    return;
+  }
+
+  const parsed = parsePurchaseCommand(ctx.match);
+  if (!parsed) {
+    await ctx.text("purchase");
+    return;
+  }
+
+  const result = await recordPurchase({
+    database: ctx.db,
+    userId: ctx.dbEntities.user.userId,
+    ticker: parsed.ticker,
+    unitPrice: parsed.unitPrice,
+    amount: parsed.amount,
+    commissionPercent: parsed.commissionPercent,
+  });
+
+  if (!result.success) {
+    await ctx.reply(
+      escapeHtml(result.error ?? "Failed to record purchase"),
+      htmlReplyOptions,
+    );
+    return;
+  }
+  if (!result.data) {
+    await ctx.reply(escapeHtml("Failed to record purchase"), htmlReplyOptions);
+    return;
+  }
+
+  await ctx.reply(
+    escapeHtml(formatPurchaseResult(result.data)),
+    htmlReplyOptions,
+  );
+  await refreshPersistentPrice(ctx.db, parsed.ticker);
 });
 
 tickersComposer.command("decorate", async (ctx) => {
@@ -125,6 +184,31 @@ tickersComposer.command("tickers", async (ctx) => {
   const tickerLabelPreferences = await readTickerLabelPreferences(ctx.from.id);
   const tickerLabelLinks = await readTickerLabelLinks(ctx.from.id);
   const priceList = await buildTickerList({
+    database: ctx.db,
+    user: ctx.dbEntities.user,
+    tickerDecorations,
+    tickerLabelPreferences,
+    tickerLabelLinks,
+  });
+
+  if (priceList.length === 0) {
+    await ctx.text("no_positions");
+    return;
+  }
+
+  await ctx.reply(priceList, htmlReplyOptions);
+});
+
+tickersComposer.command("ticker", async (ctx) => {
+  if (!ctx.dbEntities.user || !ctx.from) {
+    await ctx.text("start");
+    return;
+  }
+
+  const tickerDecorations = await readTickerDecorations(ctx.from.id);
+  const tickerLabelPreferences = await readTickerLabelPreferences(ctx.from.id);
+  const tickerLabelLinks = await readTickerLabelLinks(ctx.from.id);
+  const priceList = await buildPerformanceList({
     database: ctx.db,
     user: ctx.dbEntities.user,
     tickerDecorations,

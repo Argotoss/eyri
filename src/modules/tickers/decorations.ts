@@ -12,6 +12,51 @@ export type TickerDecorations = Record<string, TickerDecoration[]>;
 export type TickerLabelPreferences = Record<string, string | false>;
 export type TickerLabelLinks = Record<string, string>;
 
+const DEFAULT_GOOGLE_FINANCE_TAGS: Record<string, string> = {
+  IBM: "IBM:NYSE",
+  MU: "MU:NASDAQ",
+  NVDA: "NVDA:NASDAQ",
+  VEEV: "VEEV:NYSE",
+};
+
+const ICON_TECH = "\u{1F4BB}";
+const ICON_INDEX = "\u{1F310}";
+const ICON_COMPANY = "\u{1F3E2}";
+
+const DEFAULT_TICKER_LABELS: Record<string, string> = {
+  IBM: "IBM",
+  "IBM:NYSE": "IBM",
+  MU: "Micron",
+  "MU:NASDAQ": "Micron",
+  NVDA: "Nvidia",
+  "NVDA:NASDAQ": "Nvidia",
+  SPY: "SP500",
+  SPYL: "SP500",
+  "SPYL:LON": "SP500",
+  VEEV: "Veeva",
+  "VEEV:NYSE": "Veeva",
+  VOO: "SP500",
+  VUAA: "SP500",
+  "VUAA:LON": "SP500",
+};
+
+const DEFAULT_TICKER_ICONS: Record<string, string> = {
+  IBM: ICON_TECH,
+  "IBM:NYSE": ICON_TECH,
+  MU: ICON_TECH,
+  "MU:NASDAQ": ICON_TECH,
+  NVDA: ICON_TECH,
+  "NVDA:NASDAQ": ICON_TECH,
+  SPY: ICON_INDEX,
+  SPYL: ICON_INDEX,
+  "SPYL:LON": ICON_INDEX,
+  VEEV: ICON_COMPANY,
+  "VEEV:NYSE": ICON_COMPANY,
+  VOO: ICON_INDEX,
+  VUAA: ICON_INDEX,
+  "VUAA:LON": ICON_INDEX,
+};
+
 type TickerDecorationRow = {
   ticker: string;
   emoji_index: number;
@@ -512,6 +557,83 @@ function formatTickerLabel(label: string, linkTag?: string) {
   )}">${formattedLabel}</a>`;
 }
 
+function defaultGoogleFinanceTag(ticker: string) {
+  const normalizedTicker = normalizeTicker(ticker);
+  if (normalizedTicker.includes(":")) {
+    return normalizedTicker;
+  }
+  return (
+    DEFAULT_GOOGLE_FINANCE_TAGS[normalizedTicker] ??
+    `${normalizedTicker}:NASDAQ`
+  );
+}
+
+function baseTicker(ticker: string) {
+  return normalizeTicker(ticker).split(":", 1)[0];
+}
+
+function defaultTickerLabel(ticker: string) {
+  const normalizedTicker = normalizeTicker(ticker);
+  return (
+    DEFAULT_TICKER_LABELS[normalizedTicker] ??
+    DEFAULT_TICKER_LABELS[baseTicker(ticker)] ??
+    ticker
+  );
+}
+
+function defaultTickerIcon(ticker: string) {
+  const normalizedTicker = normalizeTicker(ticker);
+  const base = baseTicker(ticker);
+  const text = `${normalizedTicker} ${base}`.toUpperCase();
+  if (DEFAULT_TICKER_ICONS[normalizedTicker]) {
+    return DEFAULT_TICKER_ICONS[normalizedTicker];
+  }
+  if (DEFAULT_TICKER_ICONS[base]) {
+    return DEFAULT_TICKER_ICONS[base];
+  }
+  if (
+    ["SP", "VOO", "VTI", "VT", "QQQ", "VUAA", "SPYL", "ETF"].some((hint) =>
+      text.includes(hint),
+    )
+  ) {
+    return ICON_INDEX;
+  }
+  if (
+    [
+      "AI",
+      "AMD",
+      "ASML",
+      "CRM",
+      "GOOG",
+      "META",
+      "MSFT",
+      "MU",
+      "NVDA",
+      "ORCL",
+      "PLTR",
+      "SMCI",
+      "SOFI",
+      "TSM",
+      "TECH",
+    ].some((hint) => text.includes(hint))
+  ) {
+    return ICON_TECH;
+  }
+  return ICON_COMPANY;
+}
+
+function lookupTickerValue<T>(
+  values: Record<string, T> | undefined,
+  ticker: string,
+) {
+  if (!values) {
+    return undefined;
+  }
+
+  const normalizedTicker = normalizeTicker(ticker);
+  return values[normalizedTicker] ?? values[baseTicker(ticker)];
+}
+
 export function formatDecoratedTicker(
   ticker: string,
   decorations?: TickerDecorations,
@@ -519,14 +641,21 @@ export function formatDecoratedTicker(
   labelLinks?: TickerLabelLinks,
 ) {
   const normalizedTicker = normalizeTicker(ticker);
-  const labelPreference = labelPreferences?.[normalizedTicker];
-  const label = labelPreference === false ? null : (labelPreference ?? ticker);
-  const linkTag = label === null ? undefined : labelLinks?.[normalizedTicker];
-  const tickerDecorations = decorations?.[normalizedTicker];
+  const labelPreference = lookupTickerValue(labelPreferences, ticker);
+  const label =
+    labelPreference === false
+      ? null
+      : (labelPreference ?? defaultTickerLabel(ticker));
+  const linkTag =
+    label === null
+      ? undefined
+      : (lookupTickerValue(labelLinks, ticker) ??
+        defaultGoogleFinanceTag(ticker));
+  const tickerDecorations = lookupTickerValue(decorations, normalizedTicker);
   const decorated =
     tickerDecorations && tickerDecorations.length > 0
       ? formatTickerDecorations(tickerDecorations)
-      : null;
+      : defaultTickerIcon(ticker);
   if (!decorated) {
     return label === null ? "" : formatTickerLabel(label, linkTag);
   }
