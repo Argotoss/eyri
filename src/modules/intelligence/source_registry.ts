@@ -3,6 +3,7 @@ export type SourceReliability = "primary" | "high" | "medium" | "low";
 export type SourceCategory =
   | "market_data"
   | "fundamentals"
+  | "event_calendar"
   | "primary_filings"
   | "news"
   | "news_discovery"
@@ -116,6 +117,21 @@ const SOURCE_REGISTRY: Record<string, SourceProfile> = {
     freshness: "provider dependent",
     coverage: "analyst recommendation trends",
     limitations: "summary-level analyst data, not full research notes",
+  },
+  finnhub_earnings_calendar: {
+    key: "finnhub_earnings_calendar",
+    displayName: "Finnhub Earnings Calendar",
+    category: "event_calendar",
+    reliability: "high",
+    qualityScore: 84,
+    evidenceWeight: 0.86,
+    cost: "configured_api",
+    rateLimit: "Finnhub API plan limits",
+    freshness: "provider dependent",
+    coverage:
+      "upcoming and historical earnings dates, EPS, revenue estimates, and reported results",
+    limitations:
+      "calendar data identifies timing but needs news/transcript confirmation for thesis quality",
   },
   finnhub_social: {
     key: "finnhub_social",
@@ -295,6 +311,9 @@ export function sourceCoverageGaps(args: {
   }
   if (!categories.has("primary_filings")) {
     gaps.push("No primary filing source completed.");
+  }
+  if (!categories.has("event_calendar")) {
+    gaps.push("No event-calendar source completed.");
   }
   if (!categories.has("news") && !categories.has("news_discovery")) {
     gaps.push("No news source completed.");

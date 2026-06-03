@@ -44,6 +44,22 @@ type FinnhubNewsItem = {
   related?: string;
 };
 
+type FinnhubEarningsCalendarItem = {
+  date?: string;
+  epsActual?: number | null;
+  epsEstimate?: number | null;
+  hour?: string;
+  quarter?: number;
+  revenueActual?: number | null;
+  revenueEstimate?: number | null;
+  symbol?: string;
+  year?: number;
+};
+
+type FinnhubEarningsCalendarResponse = {
+  earningsCalendar?: FinnhubEarningsCalendarItem[];
+};
+
 type RedditChild = {
   data?: {
     id?: string;
@@ -120,6 +136,16 @@ function dateRange(horizon: IntelHorizon) {
   return { from, to };
 }
 
+function earningsCalendarDateRange(horizon: IntelHorizon) {
+  const from = new Date();
+  const to = new Date();
+  from.setUTCDate(from.getUTCDate() - horizonDays(horizon));
+  to.setUTCDate(
+    to.getUTCDate() + (horizon === "1d" ? 7 : horizon === "3d" ? 10 : 21),
+  );
+  return { from, to };
+}
+
 function parseDate(value: string | number | undefined) {
   if (typeof value === "number") {
     return new Date(value * 1000);
@@ -134,6 +160,12 @@ function parseDate(value: string | number | undefined) {
 function toNumber(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function formatOptionalNumber(label: string, value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${label}: ${value}`
+    : "";
 }
 
 function stripTags(value: string) {
@@ -489,6 +521,118 @@ async function collectFinnhub(
   };
 }
 
+export function buildFinnhubEarningsCalendarItems(args: {
+  response: FinnhubEarningsCalendarResponse;
+  ticker: string;
+  fetchedAt: Date;
+}): IntelRawItemInput[] {
+  const ticker = normalizeTicker(args.ticker);
+  const items = args.response.earningsCalendar ?? [];
+  return items
+    .filter((item) => normalizeTicker(item.symbol ?? ticker) === ticker)
+    .filter((item) => item.date)
+    .map((item): IntelRawItemInput => {
+      const eventDate = parseDate(item.date);
+      const quarter = item.quarter ? `Q${item.quarter}` : "quarter";
+      const year = item.year ? String(item.year) : "unknown year";
+      const hasReported =
+        typeof item.epsActual === "number" ||
+        typeof item.revenueActual === "number";
+      const timing = item.hour ? ` (${item.hour})` : "";
+      const title = hasReported
+        ? `${ticker} reported ${year} ${quarter} earnings on ${item.date}${timing}`
+        : `${ticker} earnings scheduled for ${item.date}${timing}`;
+      return {
+        source: "finnhub_earnings_calendar",
+        sourceType: "company",
+        sourceId: `finnhub:earnings-calendar:${ticker}:${item.date}:${item.year ?? ""}:${item.quarter ?? ""}`,
+        title,
+        url: `https://finance.yahoo.com/quote/${encodeURIComponent(ticker)}/earnings`,
+        publishedAt: eventDate,
+        discoveredAt: args.fetchedAt,
+        fetchedAt: args.fetchedAt,
+        body: [
+          `Event date: ${item.date}${timing}`,
+          item.year || item.quarter ? `Fiscal period: ${year} ${quarter}` : "",
+          formatOptionalNumber("EPS actual", item.epsActual),
+          formatOptionalNumber("EPS estimate", item.epsEstimate),
+          formatOptionalNumber("Revenue actual", item.revenueActual),
+          formatOptionalNumber("Revenue estimate", item.revenueEstimate),
+          hasReported
+            ? "Reported earnings can drive immediate post-result repricing."
+            : "Upcoming earnings are a scheduled catalyst that can drive positioning before and after the release.",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        rawPayload: item,
+        tickers: [ticker],
+      };
+    });
+}
+
+async function collectFinnhubEarningsCalendar(
+  entry: UniverseEntry,
+  horizon: IntelHorizon,
+): Promise<SourceCollectionResult> {
+  const startedAt = new Date();
+  const apiKey = env("FINNHUB_API_KEY");
+  const ticker = normalizeTicker(entry.ticker);
+  if (!apiKey) {
+    return {
+      items: [],
+      diagnostics: [
+        makeDiagnostic({
+          source: "finnhub_earnings_calendar",
+          label: `ticker-earnings-calendar:${ticker}`,
+          startedAt,
+          status: "failed",
+          itemCount: 0,
+          message: "FINNHUB_API_KEY is not configured",
+        }),
+      ],
+    };
+  }
+
+  const range = earningsCalendarDateRange(horizon);
+  const url = new URL("/api/v1/calendar/earnings", FINNHUB_BASE_URL);
+  url.searchParams.set("symbol", ticker);
+  url.searchParams.set("from", yyyyMmDd(range.from));
+  url.searchParams.set("to", yyyyMmDd(range.to));
+  url.searchParams.set("token", apiKey);
+  const result = await fetchJson<FinnhubEarningsCalendarResponse>(url);
+  const fetchedAt = new Date();
+  const items = result.data
+    ? buildFinnhubEarningsCalendarItems({
+        response: result.data,
+        ticker,
+        fetchedAt,
+      })
+    : [];
+
+  return {
+    items,
+    diagnostics: [
+      makeDiagnostic({
+        source: "finnhub_earnings_calendar",
+        label: `ticker-earnings-calendar:${ticker}`,
+        startedAt,
+        status: result.status === 200 ? "ok" : "failed",
+        itemCount: items.length,
+        message:
+          result.status === 200
+            ? undefined
+            : `HTTP ${result.status}: ${result.text.slice(0, 160)}`,
+        metadata: {
+          ticker,
+          from: yyyyMmDd(range.from),
+          to: yyyyMmDd(range.to),
+          returned: result.data?.earningsCalendar?.length ?? 0,
+        },
+      }),
+    ],
+  };
+}
+
 async function collectRss(
   entry: UniverseEntry,
   horizon: IntelHorizon,
@@ -723,18 +867,26 @@ export async function collectDeepSourceItems(
   horizon: IntelHorizon,
   preset: DeepResearchPreset = "deep",
 ): Promise<SourceCollectionResult> {
-  const [alpaca, finnhub, rss, social] = await Promise.all([
+  const [alpaca, finnhub, earnings, rss, social] = await Promise.all([
     collectAlpacaNews(entry, horizon, preset),
     collectFinnhub(entry, horizon, preset),
+    collectFinnhubEarningsCalendar(entry, horizon),
     collectRss(entry, horizon, preset),
     collectSocial(entry, horizon, preset),
   ]);
 
   return {
-    items: [...alpaca.items, ...finnhub.items, ...rss.items, ...social.items],
+    items: [
+      ...alpaca.items,
+      ...finnhub.items,
+      ...earnings.items,
+      ...rss.items,
+      ...social.items,
+    ],
     diagnostics: [
       ...alpaca.diagnostics,
       ...finnhub.diagnostics,
+      ...earnings.diagnostics,
       ...rss.diagnostics,
       ...social.diagnostics,
     ],

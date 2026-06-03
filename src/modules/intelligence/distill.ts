@@ -131,7 +131,15 @@ function topicFor(text: string, sourceType: string) {
 function catalystStrength(text: string, sourceType: string) {
   const value = normalizeText(text);
   let score =
-    sourceType === "news" ? 35 : sourceType === "sec_filing" ? 32 : 20;
+    sourceType === "news"
+      ? 35
+      : sourceType === "sec_filing"
+        ? 32
+        : sourceType === "company"
+          ? 30
+          : sourceType === "research"
+            ? 25
+            : 20;
   if (
     /\b(earnings|guidance|outlook|raised forecast|cut forecast)\b/.test(value)
   ) {

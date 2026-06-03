@@ -194,3 +194,44 @@ Remaining after this milestone:
   drift.
 - Cache reuse is visible, but collectors still fetch externally every run; the
   next layer should add fetch-level cache/delta shortcuts.
+
+### Earnings Calendar Source Milestone
+
+Goal: add a high-signal scheduled-catalyst source to the deep single-stock
+pipeline without introducing a new provider.
+
+Completed:
+
+- Added Finnhub earnings-calendar collection for deep ticker runs.
+- Added a distinct `finnhub_earnings_calendar` source diagnostic.
+- Registered the earnings calendar with source reliability, quality, coverage,
+  and rate-limit metadata.
+- Converted calendar rows into company catalyst raw items with event date,
+  fiscal period, EPS estimate/actual, and revenue estimate/actual fields.
+- Adjusted distillation scoring so company/research source types can carry more
+  catalyst weight when the text contains earnings or guidance terms.
+- Updated README source coverage text.
+- Added parser and registry tests for the new source.
+
+Verification:
+
+- `deno task format`
+- `deno task test` passed with 40 tests.
+- `deno check --allow-import src/main.ts`
+- Real isolated smoke run:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 173 raw items
+  - 140 relevant items
+  - 8 evidence packets
+  - `finnhub_earnings_calendar` diagnostic present and `ok`
+  - earnings calendar returned 0 current-window MU rows
+  - report HTML included `Decision Dossier` and `Source Quality`
+  - GDELT returned HTTP 429; captured as nonfatal source failure
+
+Remaining after this milestone:
+
+- Earnings dates identify a catalyst clock, but the thesis still needs
+  transcripts, company IR releases, analyst estimate revisions, and options
+  positioning for stronger evaluation.
+- Fetch-level cache shortcuts are still not implemented.

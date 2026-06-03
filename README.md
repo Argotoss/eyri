@@ -92,11 +92,11 @@ fundamental snapshots, catalyst summaries, and evidence links.
 
 `/intel TICKER [1d|3d|14d] [fast|deep|exhaustive]` runs the stock-agnostic deep
 research pipeline for a single requested ticker. It gathers ticker-specific SEC
-filings, GDELT articles, Alpaca/Benzinga news, Finnhub news/metrics/social
-summaries, Yahoo/Google RSS, optional Reddit search, StockTwits messages,
-optional full text from linked articles, and the existing price/fundamental
-snapshots. The attached report is built from scored evidence packets, with raw
-source lists moved into expandable appendices.
+filings, GDELT articles, Alpaca/Benzinga news, Finnhub news/metrics/earnings
+calendar/social summaries, Yahoo/Google RSS, optional Reddit search, StockTwits
+messages, optional full text from linked articles, and the existing
+price/fundamental snapshots. The attached report is built from scored evidence
+packets, with raw source lists moved into expandable appendices.
 
 Every intelligence run persists raw fetched items, item distillations, evidence
 packets, timing rows, model token/cost estimates, and the rendered report file.

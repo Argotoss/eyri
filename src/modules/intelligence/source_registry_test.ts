@@ -18,6 +18,10 @@ Deno.test("source registry exposes quality and metadata", () => {
   assert(sec.reliability === "primary", "SEC should be primary");
   assert(sec.qualityScore > stocktwits.qualityScore, "primary beats social");
   assert(sourceQualityScore("alpaca_news") >= 80, "expected API news quality");
+  assert(
+    sourceQualityScore("finnhub_earnings_calendar") >= 80,
+    "expected earnings calendar quality",
+  );
   assert(unknown.category === "unknown", "unknown sources get fallback");
 });
 
