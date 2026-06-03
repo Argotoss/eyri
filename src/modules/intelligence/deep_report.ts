@@ -1,6 +1,7 @@
 import type {
   DeepResearchData,
   DeepResearchTheme,
+  EvaluatorPacket,
   FundamentalSnapshot,
   IntelEventCluster,
   IntelHorizon,
@@ -1002,6 +1003,96 @@ function buildHtml(args: {
 </html>`;
 }
 
+function evidenceText(item: IntelRawItem) {
+  return `${item.title}\n${item.body ?? ""}`
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 1400);
+}
+
+function buildEvaluatorPacket(args: {
+  generatedAt: Date;
+  stock: StockIntel;
+  research: DeepResearchData;
+  rawItems: IntelRawItem[];
+  dossier: DecisionDossier;
+}): EvaluatorPacket {
+  const rawById = new Map(args.rawItems.map((item) => [item.id, item]));
+  const signalById = new Map(
+    args.research.topSignals.map((item) => [item.rawItemId, item]),
+  );
+  const evidencePackets = args.research.evidencePackets
+    .slice(0, 12)
+    .map((packet) => ({
+      ...packet,
+      evidence: packet.evidenceItemIds
+        .slice(0, 10)
+        .map((id) => {
+          const raw = rawById.get(id);
+          if (!raw) {
+            return null;
+          }
+          const signal = signalById.get(id);
+          return {
+            rawItemId: raw.id,
+            source: raw.source,
+            sourceType: raw.sourceType,
+            title: raw.title,
+            url: raw.url,
+            publishedAt: raw.publishedAt.toISOString(),
+            discoveredAt: raw.discoveredAt?.toISOString(),
+            signalTier: signal?.signalTier,
+            signalScore: signal?.signalScore,
+            signalReasons: signal?.signalReasons,
+            text: evidenceText(raw),
+          };
+        })
+        .filter((item): item is NonNullable<typeof item> => item !== null),
+    }));
+
+  const change = args.research.changeSummary;
+  return {
+    version: 1,
+    generatedAt: args.generatedAt.toISOString(),
+    ticker: args.stock.ticker,
+    companyName: args.stock.companyName,
+    horizon: args.research.horizon,
+    preset: args.research.preset,
+    verdict: {
+      score: args.stock.score,
+      confidence: args.stock.confidence,
+      label: args.stock.verdict,
+      thesis: args.stock.thesis,
+    },
+    decisionDossier: args.dossier,
+    market: args.stock.market,
+    fundamentals: args.stock.fundamentals,
+    signalCounts: args.research.signalCounts,
+    topSignals: args.research.topSignals.slice(0, 20),
+    evidencePackets,
+    dataQuality: args.research.dataQuality,
+    sourceDiagnostics: args.research.diagnostics.map((diagnostic) => ({
+      source: diagnostic.source,
+      status: diagnostic.status,
+      itemCount: diagnostic.itemCount,
+      message: diagnostic.message,
+    })),
+    changeSummary: change
+      ? {
+          previousRunId: change.previousRunId,
+          currentItemCount: change.currentItemCount,
+          previousItemCount: change.previousItemCount,
+          newItemCount: change.newItemCount,
+          reusedItemCount: change.reusedItemCount,
+          cacheNewItemCount: change.cacheNewItemCount,
+          droppedItemCount: change.droppedItemCount,
+          newSources: change.newSources,
+          droppedSources: change.droppedSources,
+        }
+      : undefined,
+  };
+}
+
 export async function buildDeepIntelReport(args: {
   entry: UniverseEntry;
   horizon: IntelHorizon;
@@ -1036,6 +1127,13 @@ export async function buildDeepIntelReport(args: {
     narrative,
     dossier,
   });
+  const evaluatorPacket = buildEvaluatorPacket({
+    generatedAt,
+    stock: args.stock,
+    research: args.research,
+    rawItems: args.rawItems,
+    dossier,
+  });
 
   return {
     horizon: args.horizon,
@@ -1052,5 +1150,6 @@ export async function buildDeepIntelReport(args: {
     stocks: [args.stock],
     events: args.events,
     deepResearch: args.research,
+    evaluatorPacket,
   } satisfies IntelReport;
 }

@@ -7,6 +7,7 @@ import {
   getLatestIntelDiagnostics,
   getLatestIntelReport,
   getRunItemDelta,
+  saveReport,
   saveItemDistillations,
   saveModelUsages,
   saveRawItems,
@@ -14,6 +15,7 @@ import {
   saveSourceDiagnostics,
 } from "./storage.ts";
 import type { IntelRawItemInput } from "./types.ts";
+import type { IntelReport } from "./types.ts";
 
 function assert(condition: unknown, message: string) {
   if (!condition) {
@@ -171,6 +173,84 @@ Deno.test("intelligence storage persists item signal tiers", async () => {
     );
   } finally {
     database.close();
+  }
+});
+
+Deno.test("intelligence storage writes evaluator packet sidecar", async () => {
+  const database = new Database(":memory:");
+  const previousReportsDir = Deno.env.get("EYRI_REPORTS_DIR");
+  const reportsDir = await Deno.makeTempDir();
+  try {
+    Deno.env.set("EYRI_REPORTS_DIR", reportsDir);
+    ensureIntelligenceSchema(database);
+    const now = new Date();
+    const report: IntelReport = {
+      horizon: "1d",
+      generatedAt: now,
+      universeSummary: "deep research MU",
+      telegramSummary: "Deep Intel MU",
+      executiveSummary: "Summary",
+      html: "<html>report</html>",
+      stocks: [],
+      events: [],
+      evaluatorPacket: {
+        version: 1,
+        generatedAt: now.toISOString(),
+        ticker: "MU",
+        companyName: "Micron Technology",
+        horizon: "1d",
+        preset: "fast",
+        verdict: {
+          score: 70,
+          confidence: "medium",
+          label: "Watch catalyst",
+          thesis: "Evidence packet exists.",
+        },
+        decisionDossier: {
+          setupType: "catalyst watch",
+          timeWindow: "1-3 trading days",
+          catalystClock: "fresh",
+          edgeSummary: "Potential edge",
+          topCatalysts: ["earnings"],
+          invalidation: ["price fades"],
+          missingData: ["transcript"],
+          humanChecks: ["read source"],
+        },
+        signalCounts: {
+          critical: 1,
+          high: 0,
+          medium: 0,
+          low: 0,
+          noise: 0,
+        },
+        topSignals: [],
+        evidencePackets: [],
+        dataQuality: [],
+        sourceDiagnostics: [],
+      },
+    };
+
+    const saved = saveReport(database, "chat-1", report);
+    const stored = getLatestIntelReport(database, "chat-1");
+    const evaluatorFile = saved.evaluatorFile;
+
+    if (!evaluatorFile?.path) {
+      throw new Error("expected evaluator file path");
+    }
+    assert(stored?.evaluatorFilePath, "expected stored evaluator file path");
+    assert(stored?.evaluatorJson?.ticker === "MU", "expected stored JSON");
+    assert(
+      (await Deno.readTextFile(evaluatorFile.path)).includes('"ticker": "MU"'),
+      "expected evaluator sidecar content",
+    );
+  } finally {
+    database.close();
+    if (previousReportsDir) {
+      Deno.env.set("EYRI_REPORTS_DIR", previousReportsDir);
+    } else {
+      Deno.env.delete("EYRI_REPORTS_DIR");
+    }
+    await Deno.remove(reportsDir, { recursive: true }).catch(() => undefined);
   }
 });
 

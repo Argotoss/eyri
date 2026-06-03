@@ -244,6 +244,11 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
     );
     assert(report.html.includes("Source Diagnostics"), "expected diagnostics");
     assert(report.html.includes("Source Appendix"), "expected source appendix");
+    assert(report.evaluatorPacket?.ticker === "MU", "expected packet ticker");
+    assert(
+      report.evaluatorPacket?.evidencePackets[0]?.evidence[0]?.rawItemId === 1,
+      "expected packet evidence item",
+    );
     assert(
       intelReportFileName(report).startsWith("deep-intel-MU-1d-"),
       "expected deep filename",

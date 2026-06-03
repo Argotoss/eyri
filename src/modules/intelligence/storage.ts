@@ -94,6 +94,9 @@ type ReportRow = {
   html: string;
   file_path: string | null;
   file_bytes: number | null;
+  evaluator_file_path: string | null;
+  evaluator_file_bytes: number | null;
+  evaluator_json: string | null;
   created_at: string;
 };
 
@@ -137,6 +140,9 @@ export type StoredIntelReport = {
   html: string;
   filePath?: string;
   fileBytes?: number;
+  evaluatorFilePath?: string;
+  evaluatorFileBytes?: number;
+  evaluatorJson?: Record<string, unknown>;
   createdAt: Date;
 };
 
@@ -260,6 +266,11 @@ function rowToReport(row: ReportRow): StoredIntelReport {
     html: row.html,
     filePath: row.file_path ?? undefined,
     fileBytes: row.file_bytes ?? undefined,
+    evaluatorFilePath: row.evaluator_file_path ?? undefined,
+    evaluatorFileBytes: row.evaluator_file_bytes ?? undefined,
+    evaluatorJson: row.evaluator_json
+      ? parsePayload(row.evaluator_json)
+      : undefined,
     createdAt: new Date(row.created_at),
   };
 }
@@ -402,6 +413,9 @@ export function ensureIntelligenceSchema(database: Database) {
       model_report TEXT,
       file_path TEXT,
       file_bytes INTEGER,
+      evaluator_file_path TEXT,
+      evaluator_file_bytes INTEGER,
+      evaluator_json TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -515,6 +529,14 @@ export function ensureIntelligenceSchema(database: Database) {
   addColumnIfMissing(database, "intel_raw_items", "discovered_at", "TEXT");
   addColumnIfMissing(database, "intel_reports", "file_path", "TEXT");
   addColumnIfMissing(database, "intel_reports", "file_bytes", "INTEGER");
+  addColumnIfMissing(database, "intel_reports", "evaluator_file_path", "TEXT");
+  addColumnIfMissing(
+    database,
+    "intel_reports",
+    "evaluator_file_bytes",
+    "INTEGER",
+  );
+  addColumnIfMissing(database, "intel_reports", "evaluator_json", "TEXT");
   addColumnIfMissing(database, "intel_market_snapshots", "day_high", "REAL");
   addColumnIfMissing(database, "intel_market_snapshots", "day_low", "REAL");
   addColumnIfMissing(
@@ -683,6 +705,9 @@ export function getLatestIntelReport(
         html,
         file_path,
         file_bytes,
+        evaluator_file_path,
+        evaluator_file_bytes,
+        evaluator_json,
         created_at
       FROM intel_reports
       WHERE chat_id = ?
@@ -1464,6 +1489,30 @@ function writeReportFile(report: IntelReport, reportId: number) {
   return { path: filePath, bytes };
 }
 
+function evaluatorFileName(report: IntelReport, reportId: number) {
+  const timestamp = reportTimestamp(report);
+  const prefix = report.deepResearch
+    ? `deep-intel-${report.deepResearch.ticker}-${report.horizon}`
+    : `market-intel-${report.horizon}`;
+  return `${reportId}-${prefix}-${timestamp}.evaluator.json`.replace(
+    /[^a-zA-Z0-9._-]/g,
+    "_",
+  );
+}
+
+function writeEvaluatorFile(report: IntelReport, reportId: number) {
+  if (!report.evaluatorPacket) {
+    return undefined;
+  }
+  const directory = Deno.env.get("EYRI_REPORTS_DIR") ?? "data/reports";
+  Deno.mkdirSync(directory, { recursive: true });
+  const filePath = `${directory}/${evaluatorFileName(report, reportId)}`;
+  const json = JSON.stringify(report.evaluatorPacket, null, 2);
+  Deno.writeTextFileSync(filePath, json);
+  const bytes = new TextEncoder().encode(json).byteLength;
+  return { path: filePath, bytes };
+}
+
 export function saveReport(
   database: Database,
   chatId: string | number,
@@ -1501,14 +1550,25 @@ export function saveReport(
     ).id,
   );
   const file = writeReportFile(report, reportId);
+  const evaluatorFile = writeEvaluatorFile(report, reportId);
   database
     .prepare(`
       UPDATE intel_reports
       SET file_path = ?,
-        file_bytes = ?
+        file_bytes = ?,
+        evaluator_file_path = ?,
+        evaluator_file_bytes = ?,
+        evaluator_json = ?
       WHERE id = ?
     `)
-    .run(file.path, file.bytes, reportId);
+    .run(
+      file.path,
+      file.bytes,
+      evaluatorFile?.path ?? null,
+      evaluatorFile?.bytes ?? null,
+      stringifyPayload(report.evaluatorPacket),
+      reportId,
+    );
   const insertItem = database.prepare(`
     INSERT INTO intel_report_items (
       report_id,
@@ -1531,5 +1591,5 @@ export function saveReport(
     );
   });
 
-  return { id: reportId, file };
+  return { id: reportId, file, evaluatorFile };
 }

@@ -318,3 +318,48 @@ Remaining after this milestone:
 
 - The model review currently runs on a bounded top slice, not on all raw items.
 - There is still no separate evaluator-ready JSON artifact attached to reports.
+
+### Evaluator Packet Artifact Milestone
+
+Goal: persist a compact machine-readable packet from every deep report so the
+future evaluator can consume the best evidence without re-reading the full HTML
+or raw cache.
+
+Completed:
+
+- Added an `EvaluatorPacket` report artifact type.
+- Built evaluator packets from the deterministic decision dossier, signal
+  counts, top signals, evidence packets, source diagnostics, change summary,
+  market snapshot, fundamentals, and capped evidence text.
+- Persisted evaluator packet JSON in `intel_reports`.
+- Added evaluator sidecar file writing next to the HTML report as
+  `.evaluator.json`.
+- Added SQLite migration columns for evaluator JSON path, bytes, and payload.
+- Returned evaluator file metadata from report saves.
+- Added `/intel last` visibility for the evaluator packet path.
+- Added tests for deep report packet generation and storage sidecar writing.
+
+Verification:
+
+- `deno task format`
+- `deno task test` passed with 43 tests.
+- `deno check --allow-import src/main.ts`
+- Real isolated smoke run with OpenRouter cleared and
+  `INTEL_SIGNAL_REVIEW_ENABLED=false`:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 213 raw items
+  - 143 relevant items
+  - 8 evidence packets
+  - HTML report written
+  - evaluator sidecar written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-03T20-46-49.evaluator.json`
+  - evaluator JSON size: 83,813 bytes
+  - evaluator JSON contained ticker, 8 evidence packets, and capped evidence
+    text
+  - DB stored evaluator file path, bytes, and JSON payload
+
+Remaining after this milestone:
+
+- The JSON packet is persisted but not sent as a Telegram attachment by default.
+- The evaluator itself is still not implemented.

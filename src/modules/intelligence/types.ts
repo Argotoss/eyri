@@ -307,6 +307,72 @@ export type ReportFile = {
   bytes: number;
 };
 
+export type EvaluatorEvidenceItem = {
+  rawItemId: number;
+  source: string;
+  sourceType: DeepResearchSourceType;
+  title: string;
+  url?: string;
+  publishedAt: string;
+  discoveredAt?: string;
+  signalTier?: SignalTier;
+  signalScore?: number;
+  signalReasons?: string[];
+  text: string;
+};
+
+export type EvaluatorPacket = {
+  version: 1;
+  generatedAt: string;
+  ticker: string;
+  companyName: string;
+  horizon: IntelHorizon;
+  preset: DeepResearchPreset;
+  verdict: {
+    score: number;
+    confidence: StockConfidence;
+    label: string;
+    thesis: string;
+  };
+  decisionDossier: {
+    setupType: string;
+    timeWindow: string;
+    catalystClock: string;
+    edgeSummary: string;
+    topCatalysts: string[];
+    invalidation: string[];
+    missingData: string[];
+    humanChecks: string[];
+  };
+  market?: MarketSnapshot;
+  fundamentals?: FundamentalSnapshot;
+  signalCounts: Record<SignalTier, number>;
+  topSignals: SignalItemSummary[];
+  evidencePackets: Array<
+    EvidencePacket & {
+      evidence: EvaluatorEvidenceItem[];
+    }
+  >;
+  dataQuality: string[];
+  sourceDiagnostics: Array<{
+    source: string;
+    status: SourceDiagnostic["status"];
+    itemCount: number;
+    message?: string;
+  }>;
+  changeSummary?: {
+    previousRunId?: number;
+    currentItemCount: number;
+    previousItemCount: number;
+    newItemCount: number;
+    reusedItemCount: number;
+    cacheNewItemCount: number;
+    droppedItemCount: number;
+    newSources: string[];
+    droppedSources: string[];
+  };
+};
+
 export type IntelReport = {
   id?: number;
   horizon: IntelHorizon;
@@ -318,5 +384,7 @@ export type IntelReport = {
   stocks: StockIntel[];
   events: IntelEventCluster[];
   deepResearch?: DeepResearchData;
+  evaluatorPacket?: EvaluatorPacket;
   file?: ReportFile;
+  evaluatorFile?: ReportFile;
 };

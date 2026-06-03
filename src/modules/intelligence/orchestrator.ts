@@ -267,12 +267,18 @@ export async function runIntelligenceReport({
         }),
       ),
       reportId: savedReport.id,
+      evaluatorFilePath: savedReport.evaluatorFile?.path,
     });
     console.log(
       `[intel] run ${runId} complete raw=${rawItems.length} mentions=${mentions.length} events=${rankedEvents.length} report=${savedReport.id}`,
     );
 
-    return { ...report, id: savedReport.id, file: savedReport.file };
+    return {
+      ...report,
+      id: savedReport.id,
+      file: savedReport.file,
+      evaluatorFile: savedReport.evaluatorFile,
+    };
   } catch (error) {
     console.error(
       `[intel] run ${runId} failed: ${
@@ -541,12 +547,18 @@ export async function runDeepIntelligenceReport({
         message: diagnostic.message,
       })),
       reportId: savedReport.id,
+      evaluatorFilePath: savedReport.evaluatorFile?.path,
     });
     console.log(
       `[intel] deep run ${runId} complete raw=${rawItems.length} relevant=${relevantItemIds.length} events=${rankedEvents.length} themes=${research.themes.length} report=${savedReport.id}`,
     );
 
-    return { ...report, id: savedReport.id, file: savedReport.file };
+    return {
+      ...report,
+      id: savedReport.id,
+      file: savedReport.file,
+      evaluatorFile: savedReport.evaluatorFile,
+    };
   } catch (error) {
     console.error(
       `[intel] deep run ${runId} failed: ${

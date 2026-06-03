@@ -103,6 +103,9 @@ built.
 When `OPENROUTER_API_KEY` is configured, the top signal candidates are also
 reviewed by the cheap signal model before persistence; set
 `INTEL_SIGNAL_REVIEW_ENABLED=false` to force deterministic-only scoring.
+Deep reports also persist an evaluator-ready `.evaluator.json` sidecar with the
+decision dossier, signal counts, top signals, evidence packets, source
+diagnostics, and capped source text for later model evaluation.
 
 Every intelligence run persists raw fetched items, item distillations, evidence
 packets, timing rows, model token/cost estimates, and the rendered report file.

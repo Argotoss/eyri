@@ -285,6 +285,9 @@ async function handleIntelUtilityCommand(
       report.filePath
         ? `File: ${report.filePath}${report.fileBytes ? ` (${report.fileBytes} bytes)` : ""}`
         : "File: not saved",
+      report.evaluatorFilePath
+        ? `Evaluator packet: ${report.evaluatorFilePath}${report.evaluatorFileBytes ? ` (${report.evaluatorFileBytes} bytes)` : ""}`
+        : "Evaluator packet: not saved",
       "",
       report.summaryText,
     ];
