@@ -19,6 +19,17 @@ type DeepNarrative = {
   themeNotes?: unknown;
 };
 
+type DecisionDossier = {
+  setupType: string;
+  timeWindow: string;
+  catalystClock: string;
+  edgeSummary: string;
+  topCatalysts: string[];
+  invalidation: string[];
+  missingData: string[];
+  humanChecks: string[];
+};
+
 function escapeHtml(value: string) {
   return value
     .replaceAll("&", "&amp;")
@@ -235,6 +246,186 @@ function fallbackExecutiveSummary(
   return `${stock.ticker} deep scan collected ${research.rawItemCount} raw items, kept ${research.relevantItemCount} relevant items, rejected ${research.noiseRejectedCount} low-signal items, and produced ${research.evidencePackets.length} evidence packets. Top evidence: ${topPackets || "none"}.`;
 }
 
+function timeWindowFor(
+  horizon: IntelHorizon,
+  confidence: StockIntel["confidence"],
+) {
+  if (confidence === "low") {
+    return "monitor until stronger confirmation";
+  }
+  if (horizon === "1d") {
+    return "1-3 trading days";
+  }
+  if (horizon === "3d") {
+    return "3-7 trading days";
+  }
+  return "1-2 weeks";
+}
+
+function setupTypeFor(stock: StockIntel, research: DeepResearchData) {
+  const topPacket = research.evidencePackets[0];
+  if (!topPacket || stock.score < 55 || stock.confidence === "low") {
+    return "low-conviction monitor";
+  }
+  if (topPacket.direction === "negative") {
+    return "downside catalyst / risk watch";
+  }
+  if (topPacket.direction === "mixed") {
+    return "mixed catalyst requiring confirmation";
+  }
+  if (
+    stock.market?.percentChange !== undefined &&
+    Math.abs(stock.market.percentChange) >= 6 &&
+    stock.score >= 65
+  ) {
+    return "momentum plus catalyst watch";
+  }
+
+  const topicSetups: Record<string, string> = {
+    earnings_guidance: "earnings / guidance catalyst",
+    analyst_estimates: "analyst revision catalyst",
+    supply_demand: "supply-demand catalyst",
+    customer_contracts: "customer / contract catalyst",
+    products_technology: "product / technology catalyst",
+    legal_macro_risk: "legal or macro risk catalyst",
+    social_sentiment: "social attention watch",
+    market_reaction: "market reaction catalyst",
+    sec_filings: "filing-driven watch",
+  };
+  return topicSetups[topPacket.topic] ?? "catalyst watch";
+}
+
+function latestEvidenceDate(
+  research: DeepResearchData,
+  rawById: Map<number, IntelRawItem>,
+) {
+  return research.evidencePackets
+    .flatMap((packet) => packet.evidenceItemIds)
+    .map((id) => rawById.get(id)?.publishedAt)
+    .filter((date): date is Date => date instanceof Date)
+    .sort((dateA, dateB) => dateB.getTime() - dateA.getTime())[0];
+}
+
+function edgeSummaryFor(stock: StockIntel, research: DeepResearchData) {
+  const topPacket = research.evidencePackets[0];
+  if (!topPacket) {
+    return "No evidence packet survived filtering, so there is no usable edge yet.";
+  }
+  if (stock.score >= 80 && stock.confidence !== "low") {
+    return `Strong candidate edge if ${topPacket.title.toLowerCase()} is still underpriced by the market.`;
+  }
+  if (stock.score >= 68 && stock.confidence !== "low") {
+    return `Possible actionable edge, led by ${topPacket.title.toLowerCase()}, but timing and confirmation still matter.`;
+  }
+  if (stock.score >= 55) {
+    return `Relevant setup, but the evidence is not strong enough to treat as a high-conviction signal.`;
+  }
+  return "Insufficient edge; useful mainly as background or a watchlist update.";
+}
+
+function uniqueList(values: string[], limit: number) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const cleaned = value.replace(/\s+/g, " ").trim();
+    if (!cleaned || seen.has(cleaned.toLowerCase())) {
+      continue;
+    }
+    seen.add(cleaned.toLowerCase());
+    result.push(cleaned);
+    if (result.length >= limit) {
+      break;
+    }
+  }
+  return result;
+}
+
+function buildInvalidation(stock: StockIntel, research: DeepResearchData) {
+  const topPacket = research.evidencePackets[0];
+  const directional =
+    topPacket?.direction === "negative"
+      ? "Risk case weakens if the negative catalyst is rebutted by primary sources or price recovers on strong volume."
+      : "Bull case weakens if price reaction fades, volume normalizes, or primary sources do not confirm the catalyst.";
+  return uniqueList(
+    [
+      ...stock.bearCase,
+      ...stock.risks,
+      directional,
+      "If the next market session ignores the catalyst, treat the setup as lower urgency.",
+    ],
+    6,
+  );
+}
+
+function buildMissingData(
+  stock: StockIntel,
+  research: DeepResearchData,
+  rawItems: IntelRawItem[],
+) {
+  const failedSources = research.diagnostics
+    .filter((diagnostic) => diagnostic.status === "failed")
+    .map((diagnostic) => diagnostic.source);
+  const sourceNames = new Set(rawItems.map((item) => item.source));
+  return uniqueList(
+    [
+      !stock.market ? "Market snapshot is missing." : "",
+      !stock.fundamentals ? "Fundamental snapshot is missing." : "",
+      failedSources.length > 0
+        ? `Failed source steps: ${[...new Set(failedSources)].join(", ")}.`
+        : "",
+      !sourceNames.has("sec")
+        ? "No primary SEC filing evidence was collected for this run."
+        : "",
+      research.evidencePackets.every((packet) => packet.confidence !== "high")
+        ? "No high-confidence evidence packet yet."
+        : "",
+      "Transcripts, options flow, short interest, and analyst estimate revisions are not fully integrated yet.",
+      ...research.dataQuality.filter(
+        (note) => note !== "No major data-quality warnings.",
+      ),
+    ],
+    7,
+  );
+}
+
+function buildDecisionDossier(args: {
+  horizon: IntelHorizon;
+  stock: StockIntel;
+  research: DeepResearchData;
+  rawItems: IntelRawItem[];
+}): DecisionDossier {
+  const rawById = new Map(args.rawItems.map((item) => [item.id, item]));
+  const latest = latestEvidenceDate(args.research, rawById);
+  const catalystClock = latest
+    ? `Latest packet evidence was ${formatAge(latest, new Date())}.`
+    : "No packet evidence timestamp available.";
+  const topCatalysts = args.research.evidencePackets
+    .slice(0, 5)
+    .map(
+      (packet) =>
+        `${packet.title}: ${packet.score}/100 ${packet.direction}; ${packet.conclusion}`,
+    );
+
+  return {
+    setupType: setupTypeFor(args.stock, args.research),
+    timeWindow: timeWindowFor(args.horizon, args.stock.confidence),
+    catalystClock,
+    edgeSummary: edgeSummaryFor(args.stock, args.research),
+    topCatalysts:
+      topCatalysts.length > 0
+        ? topCatalysts
+        : ["No strong catalyst packet survived filtering."],
+    invalidation: buildInvalidation(args.stock, args.research),
+    missingData: buildMissingData(args.stock, args.research, args.rawItems),
+    humanChecks: [
+      "Check whether the move is already priced in before entry.",
+      "Read the highest-quality primary or near-primary source before acting.",
+      "Compare the setup against sector peers and the current market regime.",
+      "Define exit/invalidation before sizing any trade.",
+    ],
+  };
+}
+
 function themeNote(theme: DeepResearchTheme, narrative: DeepNarrative | null) {
   const notes = narrative?.themeNotes as Record<string, unknown> | undefined;
   const note = notes?.[theme.title];
@@ -245,9 +436,10 @@ function telegramSummary(args: {
   stock: StockIntel;
   research: DeepResearchData;
   executiveSummary: string;
+  dossier: DecisionDossier;
 }) {
   const topPackets = args.research.evidencePackets
-    .slice(0, 4)
+    .slice(0, 3)
     .map(
       (packet, index) =>
         `${index + 1}. ${packet.title}: ${packet.score}/100 ${packet.direction}`,
@@ -255,14 +447,22 @@ function telegramSummary(args: {
     .join("\n");
 
   return [
-    `Deep Intel ${args.stock.ticker}`,
-    `${args.research.rawItemCount} raw / ${args.research.relevantItemCount} relevant / ${args.research.noiseRejectedCount} noise / ${args.research.sourceCount} sources`,
-    `${args.stock.verdict} (${args.stock.score}/100, ${args.stock.confidence})`,
+    `Deep Intel ${args.stock.ticker} - ${args.research.horizon}/${args.research.preset}`,
+    `Verdict: ${args.stock.verdict} (${args.stock.score}/100, ${args.stock.confidence})`,
+    `Setup: ${args.dossier.setupType} - Window: ${args.dossier.timeWindow}`,
+    `Edge: ${args.dossier.edgeSummary}`,
     "",
+    "Top evidence:",
     topPackets || "No strong evidence packets extracted.",
     "",
-    args.research.dataQuality[0],
-    "Full research report attached.",
+    "Invalidation:",
+    args.dossier.invalidation
+      .slice(0, 2)
+      .map((item) => `- ${item}`)
+      .join("\n"),
+    "",
+    `${args.research.rawItemCount} raw / ${args.research.relevantItemCount} relevant / ${args.research.noiseRejectedCount} noise / ${args.research.sourceCount} sources`,
+    "Full decision dossier attached.",
   ].join("\n");
 }
 
@@ -373,6 +573,42 @@ function packetCard(
   </section>`;
 }
 
+function listBlock(title: string, items: string[], empty: string) {
+  const values = items.length > 0 ? items : [empty];
+  return `<div class="dossier-box">
+    <h3>${escapeHtml(title)}</h3>
+    <ul>${values.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+  </div>`;
+}
+
+function dossierSection(dossier: DecisionDossier, stock: StockIntel) {
+  return `<section class="panel dossier">
+    <div class="theme-head">
+      <div>
+        <h2>Decision Dossier</h2>
+        <div class="meta">Human decision support, not an automated trade instruction</div>
+      </div>
+      <div class="score">${stock.score}</div>
+    </div>
+    <div class="dossier-grid">
+      <div class="dossier-box primary">
+        <h3>Setup</h3>
+        <strong>${escapeHtml(dossier.setupType)}</strong>
+        <p>${escapeHtml(dossier.edgeSummary)}</p>
+      </div>
+      <div class="dossier-box">
+        <h3>Time Window</h3>
+        <strong>${escapeHtml(dossier.timeWindow)}</strong>
+        <p>${escapeHtml(dossier.catalystClock)}</p>
+      </div>
+      ${listBlock("Top Catalysts", dossier.topCatalysts, "No catalyst packet survived filtering.")}
+      ${listBlock("Invalidation / Risks", dossier.invalidation, "No explicit invalidation extracted.")}
+      ${listBlock("Missing Data", dossier.missingData, "No major missing-data warning extracted.")}
+      ${listBlock("Human Checks", dossier.humanChecks, "Review primary sources before acting.")}
+    </div>
+  </section>`;
+}
+
 function themeCard(
   theme: DeepResearchTheme,
   rawById: Map<number, IntelRawItem>,
@@ -462,6 +698,7 @@ function buildHtml(args: {
   relevantItemIds: number[];
   executiveSummary: string;
   narrative: DeepNarrative | null;
+  dossier: DecisionDossier;
 }) {
   const rawById = new Map(args.rawItems.map((item) => [item.id, item]));
   const relevantIds = new Set(args.relevantItemIds);
@@ -492,6 +729,12 @@ function buildHtml(args: {
     .metric span, .stat span { display: block; color: #667085; font-size: 12px; }
     .metric strong, .stat strong { font-size: 15px; }
     .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .dossier-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+    .dossier-box { border: 1px solid #eaecf0; border-radius: 8px; background: #f8fafc; padding: 11px 12px; }
+    .dossier-box.primary { background: #eef4ff; border-color: #c7d7fe; }
+    .dossier-box strong { display: block; font-size: 16px; margin-bottom: 6px; }
+    .dossier-box p { margin: 0; color: #475467; line-height: 1.45; }
+    .dossier-box ul { margin-left: 18px; }
     .theme-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
     .score { min-width: 58px; text-align: center; border-radius: 8px; color: #fff; font-size: 24px; font-weight: 900; padding: 10px 8px; background: #344054; }
     .why { color: #475467; }
@@ -507,7 +750,7 @@ function buildHtml(args: {
     .status.failed { color: #b42318; font-weight: 700; }
     summary { cursor: pointer; font-weight: 800; }
     @media (max-width: 820px) {
-      .hero, .columns { grid-template-columns: 1fr; }
+      .hero, .columns, .dossier-grid { grid-template-columns: 1fr; }
       .stat-grid, .metrics { grid-template-columns: 1fr; }
     }
   </style>
@@ -537,6 +780,7 @@ function buildHtml(args: {
         </div>
       </div>
     </section>
+    ${dossierSection(args.dossier, args.stock)}
     <section class="panel">
       <h2>Market And Fundamentals</h2>
       <div class="columns">
@@ -588,11 +832,18 @@ export async function buildDeepIntelReport(args: {
     narrative.executiveSummary.trim()
       ? narrative.executiveSummary.trim()
       : fallbackExecutiveSummary(args.stock, args.research);
+  const dossier = buildDecisionDossier({
+    horizon: args.horizon,
+    stock: args.stock,
+    research: args.research,
+    rawItems: args.rawItems,
+  });
   const html = buildHtml({
     ...args,
     generatedAt,
     executiveSummary,
     narrative,
+    dossier,
   });
 
   return {
@@ -603,6 +854,7 @@ export async function buildDeepIntelReport(args: {
       stock: args.stock,
       research: args.research,
       executiveSummary,
+      dossier,
     }),
     executiveSummary,
     html,

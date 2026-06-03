@@ -58,3 +58,47 @@ Verification:
 - Repeat runs persist data but do not yet present a clear delta versus the
   previous report.
 - GDELT rate limiting remains expected under repeated manual runs.
+
+### Stock Dossier Milestone
+
+Goal: make deep `/intel TICKER` output read like a compact decision dossier
+instead of a raw evidence report.
+
+Completed:
+
+- Added a deterministic decision dossier layer to deep reports.
+- Added setup type inference, time window, catalyst clock, edge summary,
+  invalidation/risk list, missing-data list, and human-check checklist.
+- Made the Telegram summary use the same dossier framing:
+  - verdict
+  - setup
+  - time window
+  - edge summary
+  - top evidence
+  - invalidation
+- Kept evidence packets, legacy theme view, source diagnostics, and source
+  appendix in the attached HTML report.
+- Extended the deep report test to require the decision dossier sections.
+
+Verification:
+
+- `deno task format`
+- `deno task test` passed with 36 tests.
+- `deno check --allow-import src/main.ts`
+- Real isolated smoke run without OpenRouter:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 63 raw items
+  - 34 relevant items
+  - 6 evidence packets
+  - saved HTML report
+  - report HTML included `Decision Dossier`
+
+Remaining after this milestone:
+
+- Dossier content is deterministic and useful, but still shallow compared to
+  the final evaluator target.
+- Missing-data and invalidation are heuristic; they should become richer after
+  source registry, transcript/options/estimate sources, and cheap model item
+  scoring are added.
+- There is still no changed-since-previous-report section.

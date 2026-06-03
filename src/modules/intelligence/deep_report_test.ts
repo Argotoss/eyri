@@ -166,6 +166,24 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
       "expected summary",
     );
     assert(report.html.includes("Deep Intel MU"), "expected title");
+    assert(
+      report.telegramSummary.includes("Setup:"),
+      "expected compact setup line",
+    );
+    assert(
+      report.telegramSummary.includes("Invalidation:"),
+      "expected invalidation summary",
+    );
+    assert(
+      report.html.includes("Decision Dossier"),
+      "expected decision dossier",
+    );
+    assert(report.html.includes("Time Window"), "expected time window section");
+    assert(
+      report.html.includes("Invalidation / Risks"),
+      "expected invalidation section",
+    );
+    assert(report.html.includes("Missing Data"), "expected missing data");
     assert(report.html.includes("Source Diagnostics"), "expected diagnostics");
     assert(report.html.includes("Source Appendix"), "expected source appendix");
     assert(
