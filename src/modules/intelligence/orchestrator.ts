@@ -8,6 +8,7 @@ import { consumeModelUsages } from "./model_usage.ts";
 import { buildIntelReport } from "./report.ts";
 import { resolveMentionsForItems } from "./resolve.ts";
 import { rankEvents } from "./score.ts";
+import { reviewItemSignals } from "./signal_review.ts";
 import { collectDeepSourceItems } from "./sources/deep.ts";
 import { collectFundamentals } from "./sources/fundamentals.ts";
 import { enrichItemsWithFullText } from "./sources/fulltext.ts";
@@ -411,14 +412,20 @@ export async function runDeepIntelligenceReport({
     const relevantMentions = mentions.filter((mention) =>
       relevantIdSet.has(mention.rawItemId),
     );
-    const distillations = await timed(timings, "distill-items", async () =>
-      buildItemDistillations({
+    const distillations = await timed(timings, "distill-items", async () => {
+      const ruleBased = buildItemDistillations({
         rawItems,
         mentions,
         entry,
         horizon,
-      }),
-    );
+      });
+      return await reviewItemSignals({
+        distillations: ruleBased,
+        rawItems,
+        ticker: entry.ticker,
+        horizon,
+      });
+    });
     saveItemDistillations(database, distillations);
     const evidencePackets = await timed(
       timings,

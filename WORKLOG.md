@@ -277,3 +277,44 @@ Remaining after this milestone:
 - Tiering is deterministic and rule-based; the next layer should optionally use
   the cheap model to classify edge relevance when source volume is high.
 - The evaluator still does not consume a separate compact evidence packet file.
+
+### Model Signal Review Milestone
+
+Goal: let the cheap model review the highest-ranked raw item candidates before
+evidence packet synthesis, while keeping deterministic scoring as the fallback.
+
+Completed:
+
+- Added optional OpenRouter-backed signal review for top distillation
+  candidates.
+- Added `INTEL_SIGNAL_REVIEW_ENABLED`, `INTEL_SIGNAL_MODEL`, and
+  `INTEL_SIGNAL_REVIEW_LIMIT` controls.
+- Reused existing model usage accounting under `deep_signal_review`.
+- Applied model-reviewed tier, score, reasons, summary, and noise reason before
+  distillation persistence and evidence packet construction.
+- Added validation so model rows with invalid item IDs, tiers, or scores are
+  ignored.
+- Added unit coverage for applying model reviews and noise downgrades.
+- Updated README with the new signal review controls.
+
+Verification:
+
+- `deno task format`
+- `deno task test` passed with 42 tests.
+- `deno check --allow-import src/main.ts`
+- Real isolated smoke run with OpenRouter cleared and
+  `INTEL_SIGNAL_REVIEW_ENABLED=false`:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 174 raw items
+  - 141 relevant items
+  - 8 evidence packets
+  - signal counts: 5 critical, 17 high, 85 medium, 28 low, 39 noise
+  - `Signal Filter` rendered and Telegram summary included `Signals:`
+  - model usage rows were empty, proving deterministic fallback
+  - GDELT returned HTTP 429; captured as nonfatal source failure
+
+Remaining after this milestone:
+
+- The model review currently runs on a bounded top slice, not on all raw items.
+- There is still no separate evaluator-ready JSON artifact attached to reports.

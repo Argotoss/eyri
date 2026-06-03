@@ -100,6 +100,9 @@ packets, with raw source lists moved into expandable appendices.
 Each raw item is distilled into a signal tier (`critical`, `high`, `medium`,
 `low`, or `noise`) with a score and short reasons before evidence packets are
 built.
+When `OPENROUTER_API_KEY` is configured, the top signal candidates are also
+reviewed by the cheap signal model before persistence; set
+`INTEL_SIGNAL_REVIEW_ENABLED=false` to force deterministic-only scoring.
 
 Every intelligence run persists raw fetched items, item distillations, evidence
 packets, timing rows, model token/cost estimates, and the rendered report file.
@@ -125,7 +128,8 @@ Optional scan/source controls include `EYRI_REPORTS_DIR`,
 `INTEL_PRICE_TICKER_LIMIT`, `INTEL_GDELT_DIRECT_TICKER_LIMIT`,
 `INTEL_GDELT_SP500_FOCUS_LIMIT`, `INTEL_GDELT_429_BACKOFF_MS`,
 `INTEL_FULLTEXT_LIMIT`, `INTEL_FULLTEXT_CONCURRENCY`,
-`INTEL_FULLTEXT_TIMEOUT_MS`, `REDDIT_BEARER_TOKEN`, and
+`INTEL_FULLTEXT_TIMEOUT_MS`, `INTEL_SIGNAL_REVIEW_ENABLED`,
+`INTEL_SIGNAL_MODEL`, `INTEL_SIGNAL_REVIEW_LIMIT`, `REDDIT_BEARER_TOKEN`, and
 `INTEL_REDDIT_ALLOW_UNAUTH`.
 
 ## Groups
