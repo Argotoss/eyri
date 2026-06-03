@@ -3,6 +3,7 @@ import { Bot as TelegramBot } from "grammy";
 import type { Database } from "../database/setup.ts";
 import { findOrCreateUser } from "../database/user.ts";
 import { startComposer } from "../start/composer.ts";
+import { intelligenceComposer } from "../intelligence/composer.ts";
 import { tickersComposer } from "../tickers/composer.ts";
 import type { Bot, CustomContext } from "./types.ts";
 import { createReplyWithTextFunc } from "./utils.ts";
@@ -27,6 +28,7 @@ function extendContext(bot: Bot, database: Database) {
 function setupComposers(bot: Bot) {
   bot.use(startComposer);
   bot.use(tickersComposer);
+  bot.use(intelligenceComposer);
 }
 
 export function createBot(database: Database): Bot {
