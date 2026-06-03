@@ -564,6 +564,9 @@ export function intelReportFileName(report: IntelReport) {
     .toISOString()
     .replace(/[:.]/g, "-")
     .slice(0, 19);
+  if (report.deepResearch) {
+    return `deep-intel-${report.deepResearch.ticker}-${report.horizon}-${timestamp}.html`;
+  }
   return `market-intel-${report.horizon}-${timestamp}.html`;
 }
 

@@ -55,6 +55,7 @@ docker compose up -d --build
 /label TICKER LABEL
 /link TICKER GOOGLE_FINANCE_TAG
 /intel [1d|3d|14d]
+/intel TICKER [1d|3d|14d] [deep]
 /watch add TICKER
 /watch remove TICKER
 /watch list
@@ -85,6 +86,14 @@ bot scans the command caller's portfolio, the chat watchlist, and the optional
 S&P 500 preset. It sends a concise group summary and attaches a readable HTML
 report with ranked stock dossiers, confidence scores, market metrics,
 fundamental snapshots, catalyst summaries, and evidence links.
+
+`/intel TICKER [1d|3d|14d]` runs the stock-agnostic deep research pipeline for a
+single requested ticker. It gathers ticker-specific SEC filings, GDELT articles,
+Alpaca/Benzinga news, Finnhub news/metrics/social summaries, Yahoo/Google RSS,
+Reddit search, StockTwits messages, optional full text from linked articles, and
+the existing price/fundamental snapshots. The attached report groups the
+evidence into research themes, source diagnostics, data quality warnings, and a
+source appendix.
 
 The first information-layer sources are SEC EDGAR, GDELT news discovery, and
 the existing price providers. Extraction uses `INTEL_EXTRACT_MODEL` through

@@ -291,11 +291,20 @@ async function callOpenRouterJson(messages: OpenRouterMessage[]) {
   }
 }
 
-function compactItems(items: IntelRawItem[], mentions: TickerMention[]) {
+function envNumber(name: string, fallback: number) {
+  const value = Number(Deno.env.get(name));
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function compactItems(
+  items: IntelRawItem[],
+  mentions: TickerMention[],
+  limit = 60,
+) {
   const mentionsById = itemMentionsById(mentions);
   return items
     .filter((item) => (mentionsById.get(item.id)?.length ?? 0) > 0)
-    .slice(0, 60)
+    .slice(0, limit)
     .map((item) => ({
       id: item.id,
       title: item.title,
@@ -402,4 +411,59 @@ export async function extractEvents(
     .filter((event): event is IntelEventCandidate => event !== null);
 
   return modelEvents.length > 0 ? modelEvents : fallbackEvents;
+}
+
+export async function extractEventsForDeepResearch(
+  items: IntelRawItem[],
+  mentions: TickerMention[],
+  horizon: IntelHorizon,
+) {
+  const fallbackEvents = createRuleBasedEvents(items, mentions, horizon);
+  const limit = envNumber("INTEL_DEEP_EXTRACT_ITEM_LIMIT", 180);
+  const chunkSize = envNumber("INTEL_DEEP_EXTRACT_CHUNK_SIZE", 35);
+  const compact = compactItems(items, mentions, limit);
+  if (compact.length === 0) {
+    return fallbackEvents;
+  }
+
+  const itemsById = new Map(items.map((item) => [item.id, item]));
+  const modelEvents: IntelEventCandidate[] = [];
+  for (let index = 0; index < compact.length; index += chunkSize) {
+    const chunk = compact.slice(index, index + chunkSize);
+    const modelResponse = await callOpenRouterJson([
+      {
+        role: "system",
+        content:
+          'You extract stock-market catalyst events from one ticker research items. Return strict JSON only: {"events":[...]}. Every event must cite evidenceItemIds from the provided IDs and must include a specific title and summary. Prefer concrete facts, numbers, analyst changes, earnings/guidance, supply/demand, legal/regulatory, product/customer, and market-reaction evidence. Do not make buy/sell recommendations.',
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          horizon,
+          allowedEventTypes: EVENT_TYPES,
+          allowedDirections: DIRECTIONS,
+          allowedUrgencies: URGENCIES,
+          items: chunk,
+        }),
+      },
+    ]);
+
+    modelEvents.push(
+      ...(modelResponse?.events ?? [])
+        .map((event) => validateModelEvent(event, itemsById, horizon))
+        .filter((event): event is IntelEventCandidate => event !== null),
+    );
+  }
+
+  if (modelEvents.length === 0) {
+    return fallbackEvents;
+  }
+
+  const modelEvidence = new Set(
+    modelEvents.flatMap((event) => event.evidenceItemIds),
+  );
+  const uncoveredFallback = fallbackEvents.filter((event) =>
+    event.evidenceItemIds.every((id) => !modelEvidence.has(id)),
+  );
+  return [...modelEvents, ...uncoveredFallback];
 }

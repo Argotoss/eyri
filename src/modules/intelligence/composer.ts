@@ -6,7 +6,10 @@ import {
   removeWatchlistTicker,
   setSp500Enabled,
 } from "./storage.ts";
-import { runIntelligenceReport } from "./orchestrator.ts";
+import {
+  runDeepIntelligenceReport,
+  runIntelligenceReport,
+} from "./orchestrator.ts";
 import { INTEL_HORIZONS, type IntelHorizon } from "./types.ts";
 import { intelReportFileName } from "./report.ts";
 
@@ -26,11 +29,29 @@ function escapeHtml(value: string) {
     .replaceAll(">", "&gt;");
 }
 
-function parseHorizon(input: string | undefined): IntelHorizon | null {
-  const value = input?.trim().split(/\s+/, 1)[0] || "1d";
-  return INTEL_HORIZONS.includes(value as IntelHorizon)
-    ? (value as IntelHorizon)
-    : null;
+function parseIntelCommand(input: string | undefined) {
+  const tokens = (input ?? "").trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) {
+    return { horizon: "1d" as IntelHorizon };
+  }
+
+  const first = tokens[0].toLowerCase();
+  if (INTEL_HORIZONS.includes(first as IntelHorizon)) {
+    return { horizon: first as IntelHorizon };
+  }
+
+  const horizonToken = tokens.find((token) =>
+    INTEL_HORIZONS.includes(token.toLowerCase() as IntelHorizon),
+  );
+  return {
+    ticker: tokens[0].toUpperCase(),
+    horizon: (horizonToken?.toLowerCase() as IntelHorizon | undefined) ?? "1d",
+    deep: true,
+  };
+}
+
+function isValidTicker(value: string) {
+  return /^[A-Z0-9.:-]{1,24}$/.test(value);
 }
 
 function parseWatchCommand(input: string | undefined) {
@@ -67,27 +88,41 @@ intelligenceComposer.command("intel", async (ctx) => {
     return;
   }
 
-  const horizon = parseHorizon(ctx.match);
-  if (!horizon) {
+  const command = parseIntelCommand(ctx.match);
+  if (!command.horizon) {
     await ctx.reply(
-      "Use <code>/intel</code>, <code>/intel 1d</code>, <code>/intel 3d</code>, or <code>/intel 14d</code>.",
+      "Use <code>/intel</code>, <code>/intel 1d</code>, <code>/intel MU</code>, <code>/intel MU 3d</code>, or <code>/intel MU 14d deep</code>.",
       htmlReplyOptions,
     );
     return;
   }
+  if (command.ticker && !isValidTicker(command.ticker)) {
+    await ctx.reply("Ticker format is invalid.", htmlReplyOptions);
+    return;
+  }
 
   const progressMessage = await ctx.reply(
-    `Building ${escapeHtml(horizon)} market intel report...`,
+    command.ticker
+      ? `Building ${escapeHtml(command.horizon)} deep intel report for ${escapeHtml(command.ticker)}...`
+      : `Building ${escapeHtml(command.horizon)} market intel report...`,
     htmlReplyOptions,
   );
 
   try {
-    const report = await runIntelligenceReport({
-      database: ctx.db,
-      chatId: ctx.chat.id,
-      user: ctx.dbEntities.user,
-      horizon,
-    });
+    const report = command.ticker
+      ? await runDeepIntelligenceReport({
+          database: ctx.db,
+          chatId: ctx.chat.id,
+          user: ctx.dbEntities.user,
+          horizon: command.horizon,
+          ticker: command.ticker,
+        })
+      : await runIntelligenceReport({
+          database: ctx.db,
+          chatId: ctx.chat.id,
+          user: ctx.dbEntities.user,
+          horizon: command.horizon,
+        });
     await ctx.reply(escapeHtml(report.telegramSummary), htmlReplyOptions);
     await replyWithReportDocument(
       ctx,

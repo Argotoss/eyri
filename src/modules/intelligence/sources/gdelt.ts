@@ -40,6 +40,11 @@ type GdeltFetchResult = {
 };
 
 let lastGdeltRequestAt = 0;
+let gdeltDisabledUntil = 0;
+const gdeltCache = new Map<
+  string,
+  { fetchedAt: number; result: GdeltFetchResult }
+>();
 
 function envNumber(name: string, fallback: number) {
   const value = Number(Deno.env.get(name));
@@ -62,6 +67,15 @@ async function throttleGdelt() {
     await sleep(waitMs);
   }
   lastGdeltRequestAt = Date.now();
+}
+
+function cacheTtlMs() {
+  return envNumber("INTEL_GDELT_CACHE_TTL_MS", 15 * 60_000);
+}
+
+function retryDelayMs(attempt: number) {
+  const baseDelay = envNumber("INTEL_GDELT_429_BACKOFF_MS", 30_000);
+  return baseDelay * Math.max(1, attempt);
 }
 
 function parseGdeltDate(value: string | undefined) {
@@ -123,6 +137,40 @@ async function fetchGdeltArticles(
   maxRecords: number,
 ): Promise<GdeltFetchResult> {
   const startedAt = new Date();
+  const cacheKey = `${label}\n${query}\n${horizon}\n${maxRecords}`;
+  const cached = gdeltCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < cacheTtlMs()) {
+    return {
+      articles: cached.result.articles,
+      diagnostic: {
+        ...cached.result.diagnostic,
+        label,
+        startedAt,
+        completedAt: new Date(),
+        metadata: {
+          ...(cached.result.diagnostic.metadata ?? {}),
+          query,
+          cache: "hit",
+        },
+      },
+    };
+  }
+
+  if (Date.now() < gdeltDisabledUntil) {
+    const waitSeconds = Math.ceil((gdeltDisabledUntil - Date.now()) / 1000);
+    return {
+      articles: [],
+      diagnostic: diagnostic({
+        label,
+        startedAt,
+        status: "failed",
+        itemCount: 0,
+        message: `GDELT temporarily disabled after rate limiting; retry in ${waitSeconds}s`,
+        metadata: { query, disabledUntil: new Date(gdeltDisabledUntil) },
+      }),
+    };
+  }
+
   const url = new URL(GDELT_DOC_URL);
   url.searchParams.set("query", query);
   url.searchParams.set("mode", "ArtList");
@@ -131,31 +179,72 @@ async function fetchGdeltArticles(
   url.searchParams.set("maxrecords", String(maxRecords));
   url.searchParams.set("sort", "HybridRel");
 
-  try {
-    await throttleGdelt();
-    const response = await fetch(url, {
-      headers: { "User-Agent": "Eyri market intelligence" },
-    });
-    const text = await response.text();
-    if (!response.ok) {
-      const message = `HTTP ${response.status}: ${text.slice(0, 180)}`;
-      console.error(`[intel:gdelt] ${label} failed: ${message}`);
-      return {
-        articles: [],
+  const maxRetries = envNumber("INTEL_GDELT_MAX_RETRIES", 2);
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      await throttleGdelt();
+      const response = await fetch(url, {
+        headers: { "User-Agent": "Eyri market intelligence" },
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        const message = `HTTP ${response.status}: ${text.slice(0, 180)}`;
+        console.error(`[intel:gdelt] ${label} failed: ${message}`);
+        if (response.status === 429 && attempt < maxRetries) {
+          const waitMs = retryDelayMs(attempt + 1);
+          gdeltDisabledUntil = Date.now() + waitMs;
+          await sleep(waitMs);
+          continue;
+        }
+        const failed = {
+          articles: [],
+          diagnostic: diagnostic({
+            label,
+            startedAt,
+            status: "failed",
+            itemCount: 0,
+            message,
+            metadata: { query, status: response.status, attempt },
+          }),
+        };
+        if (response.status === 429) {
+          gdeltDisabledUntil = Date.now() + retryDelayMs(maxRetries + 1);
+        }
+        return failed;
+      }
+
+      const data = parseGdeltResponseText(text);
+      if (!data) {
+        const message = `non-JSON response: ${text.slice(0, 180)}`;
+        console.error(`[intel:gdelt] ${label} failed: ${message}`);
+        return {
+          articles: [],
+          diagnostic: diagnostic({
+            label,
+            startedAt,
+            status: "failed",
+            itemCount: 0,
+            message,
+            metadata: { query },
+          }),
+        };
+      }
+
+      const articles = data.articles ?? [];
+      const result = {
+        articles,
         diagnostic: diagnostic({
           label,
           startedAt,
-          status: "failed",
-          itemCount: 0,
-          message,
-          metadata: { query, status: response.status },
+          status: "ok",
+          itemCount: articles.length,
+          metadata: { query, cache: "miss" },
         }),
       };
-    }
-
-    const data = parseGdeltResponseText(text);
-    if (!data) {
-      const message = `non-JSON response: ${text.slice(0, 180)}`;
+      gdeltCache.set(cacheKey, { fetchedAt: Date.now(), result });
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       console.error(`[intel:gdelt] ${label} failed: ${message}`);
       return {
         articles: [],
@@ -169,33 +258,19 @@ async function fetchGdeltArticles(
         }),
       };
     }
-
-    const articles = data.articles ?? [];
-    return {
-      articles,
-      diagnostic: diagnostic({
-        label,
-        startedAt,
-        status: "ok",
-        itemCount: articles.length,
-        metadata: { query },
-      }),
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`[intel:gdelt] ${label} failed: ${message}`);
-    return {
-      articles: [],
-      diagnostic: diagnostic({
-        label,
-        startedAt,
-        status: "failed",
-        itemCount: 0,
-        message,
-        metadata: { query },
-      }),
-    };
   }
+
+  return {
+    articles: [],
+    diagnostic: diagnostic({
+      label,
+      startedAt,
+      status: "failed",
+      itemCount: 0,
+      message: "GDELT request exhausted retries",
+      metadata: { query },
+    }),
+  };
 }
 
 function rawItemsFromArticles(
@@ -223,6 +298,57 @@ function rawItemsFromArticles(
 function directQueryForTicker(entry: UniverseEntry) {
   const name = entry.name === entry.ticker ? "" : entry.name;
   return [name && `"${name}"`, entry.ticker, "stock"].filter(Boolean).join(" ");
+}
+
+function deepQueriesForTicker(entry: UniverseEntry) {
+  const name = entry.name === entry.ticker ? "" : entry.name;
+  const quotedName = name ? `"${name}"` : "";
+  const aliases = entry.aliases
+    .filter((alias) => alias !== entry.ticker && alias.length >= 4)
+    .slice(0, 3)
+    .map((alias) => `"${alias}"`);
+  const identity = [quotedName, ...aliases, `$${entry.ticker}`, entry.ticker]
+    .filter(Boolean)
+    .join(" OR ");
+  const sourceLang = "sourcelang:english";
+
+  return [
+    {
+      label: `ticker-deep:${entry.ticker}:latest`,
+      query: `(${identity}) ${sourceLang}`,
+    },
+    {
+      label: `ticker-deep:${entry.ticker}:catalysts`,
+      query: `(${identity}) (earnings OR guidance OR outlook OR upgrade OR downgrade OR "price target" OR analyst OR revenue OR margin OR demand OR supply OR contract OR lawsuit OR investigation OR acquisition) ${sourceLang}`,
+    },
+    {
+      label: `ticker-deep:${entry.ticker}:market-reaction`,
+      query: `(${identity}) (shares OR stock OR premarket OR "after hours" OR volume OR rallies OR jumps OR falls OR slides OR volatility) ${sourceLang}`,
+    },
+    {
+      label: `ticker-deep:${entry.ticker}:industry`,
+      query: entry.sector
+        ? `(${identity}) ("${entry.sector}" OR sector OR industry OR competitor OR demand OR pricing) ${sourceLang}`
+        : `(${identity}) (sector OR industry OR competitor OR demand OR pricing) ${sourceLang}`,
+    },
+  ];
+}
+
+export async function collectGdeltItemsForTicker(
+  entry: UniverseEntry,
+  horizon: IntelHorizon,
+): Promise<SourceCollectionResult> {
+  const maxRecords = envNumber("INTEL_GDELT_DEEP_MAX_RECORDS", 100);
+  const rawItems: IntelRawItemInput[] = [];
+  const diagnostics: SourceDiagnostic[] = [];
+
+  for (const { label, query } of deepQueriesForTicker(entry)) {
+    const result = await fetchGdeltArticles(label, query, horizon, maxRecords);
+    diagnostics.push(result.diagnostic);
+    rawItems.push(...rawItemsFromArticles(result.articles, label));
+  }
+
+  return { items: rawItems, diagnostics };
 }
 
 export async function collectGdeltItems(

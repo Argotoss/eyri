@@ -62,6 +62,14 @@ function normalizeTicker(ticker: string) {
   return ticker.trim().toUpperCase();
 }
 
+function isPriorityEntry(entry: UniverseEntry) {
+  return (
+    entry.sources.includes("portfolio") ||
+    entry.sources.includes("watchlist") ||
+    entry.sources.includes("target")
+  );
+}
+
 function cikPadded(cik: number | string) {
   return String(cik).padStart(10, "0");
 }
@@ -195,6 +203,64 @@ function companyFilingsToRawItems(
   return items;
 }
 
+export async function collectSecItemsForTicker(
+  entry: UniverseEntry,
+  horizon: IntelHorizon,
+): Promise<SourceCollectionResult> {
+  const startedAt = new Date();
+  const tickerMap = await loadTickerMap();
+  const secEntry = tickerMap.get(normalizeTicker(entry.ticker));
+  if (!secEntry) {
+    return {
+      items: [],
+      diagnostics: [
+        makeDiagnostic({
+          label: `ticker-sec-filings:${entry.ticker}`,
+          startedAt,
+          status: "failed",
+          itemCount: 0,
+          message: `Missing SEC CIK for ${entry.ticker}`,
+          metadata: { ticker: entry.ticker },
+        }),
+      ],
+    };
+  }
+
+  const cik = cikPadded(secEntry.cik_str);
+  const submissions = await fetchJson<SecSubmissions>(
+    `${SEC_SUBMISSIONS_BASE_URL}CIK${cik}.json`,
+  );
+  if (!submissions) {
+    return {
+      items: [],
+      diagnostics: [
+        makeDiagnostic({
+          label: `ticker-sec-filings:${entry.ticker}`,
+          startedAt,
+          status: "failed",
+          itemCount: 0,
+          message: `Failed SEC submissions for ${entry.ticker}`,
+          metadata: { ticker: entry.ticker, cik },
+        }),
+      ],
+    };
+  }
+
+  const items = companyFilingsToRawItems(entry.ticker, submissions, horizon);
+  return {
+    items,
+    diagnostics: [
+      makeDiagnostic({
+        label: `ticker-sec-filings:${entry.ticker}`,
+        startedAt,
+        status: "ok",
+        itemCount: items.length,
+        metadata: { ticker: entry.ticker, cik },
+      }),
+    ],
+  };
+}
+
 export async function collectSecItems(
   universe: UniverseEntry[],
   horizon: IntelHorizon,
@@ -202,13 +268,7 @@ export async function collectSecItems(
   const startedAt = new Date();
   const limit = envNumber("INTEL_SEC_TICKER_LIMIT", 25);
   const tickerMap = await loadTickerMap();
-  const priorityEntries = universe
-    .filter(
-      (entry) =>
-        entry.sources.includes("portfolio") ||
-        entry.sources.includes("watchlist"),
-    )
-    .slice(0, limit);
+  const priorityEntries = universe.filter(isPriorityEntry).slice(0, limit);
   const items: IntelRawItemInput[] = [];
   const missingCikTickers: string[] = [];
   const failedTickers: string[] = [];

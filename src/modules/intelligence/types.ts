@@ -4,7 +4,7 @@ export const INTEL_HORIZONS = ["1d", "3d", "14d"] as const;
 
 export type IntelHorizon = (typeof INTEL_HORIZONS)[number];
 
-export type UniverseSource = "portfolio" | "watchlist" | "sp500";
+export type UniverseSource = "portfolio" | "watchlist" | "sp500" | "target";
 
 export type UniverseEntry = {
   ticker: string;
@@ -29,10 +29,15 @@ export type IntelligenceRunArgs = {
 };
 
 export type SourceType = "news" | "sec_filing" | "market";
+export type DeepResearchSourceType =
+  | SourceType
+  | "social"
+  | "research"
+  | "company";
 
 export type IntelRawItemInput = {
   source: string;
-  sourceType: SourceType;
+  sourceType: DeepResearchSourceType;
   sourceId: string;
   title: string;
   url?: string;
@@ -179,6 +184,33 @@ export type StockIntel = {
   latestPublishedAt?: Date;
 };
 
+export type DeepResearchTheme = {
+  key: string;
+  title: string;
+  direction: DirectionHint;
+  confidence: StockConfidence;
+  score: number;
+  summary: string;
+  whyItMatters: string;
+  keyFacts: string[];
+  evidenceItemIds: number[];
+  sourceCount: number;
+  latestPublishedAt?: Date;
+};
+
+export type DeepResearchData = {
+  ticker: string;
+  companyName: string;
+  horizon: IntelHorizon;
+  rawItemCount: number;
+  relevantItemCount: number;
+  duplicateItemCount: number;
+  sourceCount: number;
+  themes: DeepResearchTheme[];
+  diagnostics: SourceDiagnostic[];
+  dataQuality: string[];
+};
+
 export type IntelReport = {
   id?: number;
   horizon: IntelHorizon;
@@ -189,4 +221,5 @@ export type IntelReport = {
   html: string;
   stocks: StockIntel[];
   events: IntelEventCluster[];
+  deepResearch?: DeepResearchData;
 };
