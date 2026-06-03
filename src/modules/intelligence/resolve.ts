@@ -4,14 +4,20 @@ const AMBIGUOUS_TICKERS = new Set([
   "A",
   "AI",
   "ALL",
+  "AM",
+  "AN",
   "ARE",
   "C",
   "F",
+  "HAS",
   "IT",
   "KEY",
   "LIFE",
+  "NDAQ",
   "NOW",
   "ON",
+  "OR",
+  "PM",
   "T",
   "V",
 ]);
@@ -34,13 +40,16 @@ function normalizeText(value: string) {
 }
 
 function itemText(item: IntelRawItem) {
-  return `${item.title}\n${item.body ?? ""}`;
+  return `${item.title}\n${item.body ?? ""}`
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*query:\s*ticker:/i.test(line))
+    .join("\n");
 }
 
 function hasTicker(text: string, ticker: string) {
   const escaped = escapeRegExp(ticker);
-  const regex = new RegExp(`(^|[^A-Z0-9.])\\$?${escaped}([^A-Z0-9.]|$)`, "i");
-  return regex.test(text);
+  const regex = new RegExp(`(^|[^A-Z0-9.])${escaped}([^A-Z0-9.]|$)`);
+  return regex.test(text) || hasCashTicker(text, ticker);
 }
 
 function hasCashTicker(text: string, ticker: string) {
@@ -56,6 +65,15 @@ function hasCompanyName(normalizedText: string, entry: UniverseEntry) {
     .some((alias) => haystack.includes(` ${normalizeText(alias)} `));
 }
 
+function isExchangeOnlyCompanyMatch(text: string, entry: UniverseEntry) {
+  if (entry.ticker !== "NDAQ") {
+    return false;
+  }
+
+  const explicitCompany = /\bnasdaq\s+(inc|omx|stock market)\b/i.test(text);
+  return !explicitCompany && /\bnasdaq\s*:/i.test(text);
+}
+
 function mentionConfidence(
   text: string,
   normalizedText: string,
@@ -63,7 +81,9 @@ function mentionConfidence(
 ) {
   const ticker = normalizeTicker(entry.ticker);
   const sourceBoost = entry.priority >= 80 ? 0.05 : 0;
-  const companyMatched = hasCompanyName(normalizedText, entry);
+  const companyMatched =
+    hasCompanyName(normalizedText, entry) &&
+    !isExchangeOnlyCompanyMatch(text, entry);
   const tickerMatched = hasTicker(text, ticker);
 
   if (companyMatched && tickerMatched) {

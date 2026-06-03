@@ -4,18 +4,16 @@ import type {
   IntelRawItem,
   IntelReport,
   MarketSnapshot,
+  StockIntel,
   UniverseEntry,
 } from "./types.ts";
 
 type ReportNarrative = {
-  telegramSummary?: unknown;
   executiveSummary?: unknown;
-  itemSummaries?: unknown;
+  stockNotes?: unknown;
 };
 
 const ICON_FIRE = "\u{1F525}";
-const ICON_SIREN = "\u{1F6A8}";
-const ICON_WARNING = "\u{26A0}\u{FE0F}";
 
 function escapeHtml(value: string) {
   return value
@@ -33,6 +31,19 @@ function formatSignedPercent(value?: number) {
     return "n/a";
   }
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+function formatMoney(value?: number, digits = 2) {
+  if (value === undefined || Number.isNaN(value)) {
+    return "n/a";
+  }
+  if (Math.abs(value) >= 1_000_000_000) {
+    return `$${(value / 1_000_000_000).toFixed(2)}B`;
+  }
+  if (Math.abs(value) >= 1_000_000) {
+    return `$${(value / 1_000_000).toFixed(2)}M`;
+  }
+  return `$${value.toFixed(digits)}`;
 }
 
 function formatNumber(value?: number) {
@@ -63,54 +74,58 @@ function formatAge(date: Date, now: Date) {
   return `${(hours / 24).toFixed(1)}d ago`;
 }
 
-function eventIcon(event: IntelEventCluster) {
-  if (event.score >= 80) {
-    return ICON_FIRE;
+function metric(label: string, value: string) {
+  return `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+function confidenceClass(stock: StockIntel) {
+  if (stock.confidence === "high") {
+    return "high";
   }
-  if (event.urgency === "high") {
-    return ICON_SIREN;
+  if (stock.confidence === "medium") {
+    return "medium";
   }
-  if (event.directionHint === "negative") {
-    return ICON_WARNING;
-  }
-  return "-";
+  return "low";
+}
+
+function stockNoteFor(stock: StockIntel, narrative: ReportNarrative | null) {
+  const notes = narrative?.stockNotes as Record<string, unknown> | undefined;
+  const value = notes?.[stock.ticker];
+  return typeof value === "string" && value.trim()
+    ? value.trim()
+    : stock.thesis;
 }
 
 function buildFallbackTelegramSummary(
   horizon: IntelHorizon,
-  events: IntelEventCluster[],
-  snapshots: Map<string, MarketSnapshot>,
+  stocks: StockIntel[],
 ) {
-  const top = events.slice(0, 5);
+  const top = stocks.slice(0, 5);
   if (top.length === 0) {
-    return `${ICON_FIRE} Market Intel: ${horizon}\n\nNo high-confidence catalysts found in this run. Full report attached.`;
+    return `${ICON_FIRE} Market Intel ${horizon}\n\nNo high-confidence stock setups found. Full report attached.`;
   }
 
   return [
-    `${ICON_FIRE} Market Intel: ${horizon}`,
+    `${ICON_FIRE} Market Intel ${horizon}`,
     "",
-    ...top.map((event, index) => {
-      const snapshot = snapshots.get(event.ticker);
-      const move = snapshot
-        ? ` ${formatSignedPercent(snapshot.percentChange)}`
+    ...top.map((stock, index) => {
+      const move = stock.market
+        ? ` ${formatSignedPercent(stock.market.percentChange)}`
         : "";
-      return `${index + 1}. ${eventIcon(event)} ${event.ticker}${move} - ${event.eventType.replaceAll(
-        "_",
-        " ",
-      )} (${event.score}/100)`;
+      return `${index + 1}. ${stock.ticker} ${stock.score}/100${move} - ${stock.verdict}`;
     }),
     "",
-    "Full report attached.",
+    "Full stock report attached.",
   ].join("\n");
 }
 
-function buildFallbackExecutiveSummary(events: IntelEventCluster[]) {
-  if (events.length === 0) {
-    return "No high-confidence catalysts were found in the scanned universe. This can mean either a quiet window or source/API gaps during the run.";
+function buildFallbackExecutiveSummary(stocks: StockIntel[]) {
+  if (stocks.length === 0) {
+    return "No stock-level setups survived filtering. This usually means the run found weak, duplicated, or low-confidence source items.";
   }
 
-  const hottest = events[0];
-  return `Top catalyst is ${hottest.ticker}: ${hottest.summary}. The report is ranked by freshness, source quality, portfolio/watchlist relevance, and market reaction.`;
+  const top = stocks[0];
+  return `${top.ticker} is the top stock-level setup (${top.score}/100, ${top.confidence} confidence): ${top.thesis}`;
 }
 
 function modelName() {
@@ -140,28 +155,32 @@ function parseJsonObject(value: string): ReportNarrative | null {
 
 async function callReportModel(
   horizon: IntelHorizon,
-  events: IntelEventCluster[],
+  stocks: StockIntel[],
   rawItems: IntelRawItem[],
-  snapshots: Map<string, MarketSnapshot>,
 ) {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY")?.trim();
-  if (!apiKey || events.length === 0) {
+  if (!apiKey || stocks.length === 0) {
     return null;
   }
 
   const rawById = new Map(rawItems.map((item) => [item.id, item]));
   const payload = {
     horizon,
-    events: events.slice(0, 12).map((event) => ({
-      ticker: event.ticker,
-      score: event.score,
-      type: event.eventType,
-      direction: event.directionHint,
-      urgency: event.urgency,
-      summary: event.summary,
-      scoreReasons: event.scoreReasons,
-      market: snapshots.get(event.ticker),
-      evidence: event.evidenceItemIds.slice(0, 4).map((id) => {
+    stocks: stocks.slice(0, 8).map((stock) => ({
+      ticker: stock.ticker,
+      companyName: stock.companyName,
+      score: stock.score,
+      confidence: stock.confidence,
+      verdict: stock.verdict,
+      thesis: stock.thesis,
+      bullCase: stock.bullCase,
+      bearCase: stock.bearCase,
+      risks: stock.risks,
+      scoreBreakdown: stock.scoreBreakdown,
+      market: stock.market,
+      fundamentals: stock.fundamentals,
+      catalystTypes: [...new Set(stock.events.map((event) => event.eventType))],
+      evidence: stock.evidenceItemIds.slice(0, 6).map((id) => {
         const item = rawById.get(id);
         return item
           ? {
@@ -193,7 +212,7 @@ async function callReportModel(
             {
               role: "system",
               content:
-                "You write concise market intelligence for a human trader. No buy/sell orders. Return strict JSON with telegramSummary, executiveSummary, and itemSummaries keyed by ticker.",
+                "You write compact stock-level market intelligence. Do not write buy/sell orders. Return strict JSON with executiveSummary and stockNotes keyed by ticker. Be specific and avoid generic finance filler.",
             },
             {
               role: "user",
@@ -219,104 +238,170 @@ async function callReportModel(
   }
 }
 
-function itemSummaryFor(
-  event: IntelEventCluster,
-  narrative: ReportNarrative | null,
-) {
-  const itemSummaries = narrative?.itemSummaries as
-    | Record<string, unknown>
-    | undefined;
-  const value = itemSummaries?.[event.ticker];
-  return typeof value === "string" && value.trim()
-    ? value.trim()
-    : event.summary;
+function topTable(stocks: StockIntel[]) {
+  const rows = stocks
+    .slice(0, 10)
+    .map((stock, index) => {
+      const move = formatSignedPercent(stock.market?.percentChange);
+      const volume = stock.market?.volumeRatio
+        ? `${stock.market.volumeRatio.toFixed(2)}x`
+        : "n/a";
+      return `<tr>
+        <td>${index + 1}</td>
+        <td><a href="#${escapeHtmlAttribute(stock.ticker)}">${escapeHtml(stock.ticker)}</a></td>
+        <td><strong>${stock.score}</strong></td>
+        <td><span class="pill ${confidenceClass(stock)}">${escapeHtml(stock.confidence)}</span></td>
+        <td>${escapeHtml(move)}</td>
+        <td>${escapeHtml(volume)}</td>
+        <td>${escapeHtml(stock.verdict)}</td>
+      </tr>`;
+    })
+    .join("");
+
+  return `<section class="panel">
+    <h2>Top Stock Setups</h2>
+    <table>
+      <thead><tr><th>#</th><th>Ticker</th><th>Score</th><th>Confidence</th><th>Move</th><th>Vol</th><th>Verdict</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="7">No stock setups found.</td></tr>'}</tbody>
+    </table>
+  </section>`;
 }
 
-function evidenceHtml(
-  event: IntelEventCluster,
-  rawItems: Map<number, IntelRawItem>,
-) {
-  return event.evidenceItemIds
+function scoreBreakdownHtml(stock: StockIntel) {
+  const rows = [
+    ["Catalyst", stock.scoreBreakdown.catalyst],
+    ["Market", stock.scoreBreakdown.market],
+    ["Relevance", stock.scoreBreakdown.relevance],
+    ["Fundamentals", stock.scoreBreakdown.fundamentals],
+    ["Risk penalty", -stock.scoreBreakdown.riskPenalty],
+  ];
+
+  return `<div class="score-grid">${rows
+    .map(
+      ([label, value]) =>
+        `<div><span>${escapeHtml(String(label))}</span><strong>${Number(value) >= 0 ? "+" : ""}${value}</strong></div>`,
+    )
+    .join("")}</div>`;
+}
+
+function marketMetrics(stock: StockIntel) {
+  const market = stock.market;
+  return [
+    metric("Price", formatMoney(market?.price)),
+    metric("Move", formatSignedPercent(market?.percentChange)),
+    metric(
+      "Day range",
+      `${formatMoney(market?.dayLow)} - ${formatMoney(market?.dayHigh)}`,
+    ),
+    metric(
+      "52w range",
+      `${formatMoney(market?.fiftyTwoWeekLow)} - ${formatMoney(market?.fiftyTwoWeekHigh)}`,
+    ),
+    metric("Volume", formatNumber(market?.volume)),
+    metric(
+      "Rel volume",
+      market?.volumeRatio ? `${market.volumeRatio.toFixed(2)}x` : "n/a",
+    ),
+  ].join("");
+}
+
+function fundamentalMetrics(stock: StockIntel) {
+  const fundamentals = stock.fundamentals;
+  return [
+    metric(
+      "P/E",
+      fundamentals?.estimatedPe ? fundamentals.estimatedPe.toFixed(1) : "n/a",
+    ),
+    metric("Forward P/E", "n/a"),
+    metric("Revenue", formatMoney(fundamentals?.revenue, 0)),
+    metric("Net income", formatMoney(fundamentals?.netIncome, 0)),
+    metric("Diluted EPS", fundamentals?.epsDiluted?.toFixed(2) ?? "n/a"),
+    metric("Cash", formatMoney(fundamentals?.cash, 0)),
+    metric("Long debt", formatMoney(fundamentals?.longTermDebt, 0)),
+    metric(
+      "FY/period",
+      fundamentals?.fiscalYear
+        ? `${fundamentals.fiscalYear} ${fundamentals.fiscalPeriod ?? ""}`.trim()
+        : "n/a",
+    ),
+  ].join("");
+}
+
+function listHtml(items: string[]) {
+  return `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
+}
+
+function catalystHtml(stock: StockIntel) {
+  return stock.events
     .slice(0, 6)
+    .map(
+      (event) => `<div class="catalyst">
+        <strong>${escapeHtml(event.eventType.replaceAll("_", " "))}</strong>
+        <span>${escapeHtml(event.directionHint)} / ${escapeHtml(event.urgency)} / ${event.sourceCount} source${event.sourceCount === 1 ? "" : "s"}</span>
+        <p>${escapeHtml(event.summary)}</p>
+      </div>`,
+    )
+    .join("");
+}
+
+function evidenceHtml(stock: StockIntel, rawItems: Map<number, IntelRawItem>) {
+  return stock.evidenceItemIds
+    .slice(0, 10)
     .map((id) => {
       const item = rawItems.get(id);
       if (!item) {
         return "";
       }
-
-      const title = escapeHtml(item.title);
-      const label = `${escapeHtml(item.source)} - ${formatAge(
-        item.publishedAt,
-        new Date(),
-      )}`;
       const link = item.url
-        ? `<a href="${escapeHtmlAttribute(item.url)}">${title}</a>`
-        : title;
-      return `<li>${link}<div class="footnote">${label}</div></li>`;
+        ? `<a href="${escapeHtmlAttribute(item.url)}">${escapeHtml(item.title)}</a>`
+        : escapeHtml(item.title);
+      return `<li>${link}<span>${escapeHtml(item.source)} - ${formatAge(item.publishedAt, new Date())}</span></li>`;
     })
     .filter(Boolean)
     .join("");
 }
 
-function eventCardHtml(
-  event: IntelEventCluster,
+function stockCardHtml(
+  stock: StockIntel,
   rawItems: Map<number, IntelRawItem>,
-  snapshots: Map<string, MarketSnapshot>,
   narrative: ReportNarrative | null,
 ) {
-  const snapshot = snapshots.get(event.ticker);
-  const marketBits = [
-    `price ${snapshot ? `$${snapshot.price.toFixed(2)}` : "n/a"}`,
-    `move ${formatSignedPercent(snapshot?.percentChange)}`,
-    snapshot?.volumeRatio
-      ? `volume ${snapshot.volumeRatio.toFixed(2)}x`
-      : "volume n/a",
-  ];
-  return `
-    <section class="event">
-      <div class="event-head">
-        <div>
-          <div class="ticker">${escapeHtml(event.ticker)}</div>
-          <h2>${escapeHtml(event.title)}</h2>
-        </div>
-        <div class="score">${event.score}</div>
+  return `<section class="stock" id="${escapeHtmlAttribute(stock.ticker)}">
+    <div class="stock-head">
+      <div>
+        <div class="ticker">${escapeHtml(stock.ticker)} <span>${escapeHtml(stock.companyName)}</span></div>
+        <h2>${escapeHtml(stock.verdict)}</h2>
       </div>
-      <div class="tags">
-        <span>${escapeHtml(event.eventType.replaceAll("_", " "))}</span>
-        <span>${escapeHtml(event.urgency)}</span>
-        <span>${escapeHtml(event.directionHint)}</span>
+      <div class="score ${confidenceClass(stock)}">${stock.score}</div>
+    </div>
+    <p class="thesis">${escapeHtml(stockNoteFor(stock, narrative))}</p>
+    ${scoreBreakdownHtml(stock)}
+    <div class="columns">
+      <div>
+        <h3>Market</h3>
+        <div class="metrics">${marketMetrics(stock)}</div>
       </div>
-      <p>${escapeHtml(itemSummaryFor(event, narrative))}</p>
-      <div class="metrics">${marketBits.map((bit) => `<span>${escapeHtml(bit)}</span>`).join("")}</div>
-      <div class="reasons">${event.scoreReasons.map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}</div>
-      <h3>Evidence</h3>
-      <ol>${evidenceHtml(event, rawItems)}</ol>
-    </section>
-  `;
+      <div>
+        <h3>Fundamentals</h3>
+        <div class="metrics">${fundamentalMetrics(stock)}</div>
+      </div>
+    </div>
+    <div class="columns">
+      <div><h3>Bull Case</h3>${listHtml(stock.bullCase)}</div>
+      <div><h3>Bear / Risk</h3>${listHtml([...stock.bearCase, ...stock.risks].slice(0, 6))}</div>
+    </div>
+    <h3>Catalysts</h3>
+    ${catalystHtml(stock)}
+    <h3>Evidence</h3>
+    <ol class="evidence">${evidenceHtml(stock, rawItems)}</ol>
+  </section>`;
 }
 
-function buildHtmlReport(args: {
-  horizon: IntelHorizon;
-  generatedAt: Date;
-  universeSummary: string;
-  events: IntelEventCluster[];
-  rawItems: IntelRawItem[];
-  snapshots: Map<string, MarketSnapshot>;
-  executiveSummary: string;
-  narrative: ReportNarrative | null;
-}) {
-  const rawById = new Map(args.rawItems.map((item) => [item.id, item]));
-  const cards = args.events
-    .slice(0, 30)
-    .map((event) =>
-      eventCardHtml(event, rawById, args.snapshots, args.narrative),
-    )
-    .join("");
-  const rawRows = args.rawItems
-    .slice(0, 120)
+function sourceFootnotes(rawItems: IntelRawItem[]) {
+  const rows = rawItems
+    .slice(0, 160)
     .map(
-      (item) => `
-      <tr>
+      (item) => `<tr>
         <td>${escapeHtml(item.source)}</td>
         <td>${escapeHtml(item.sourceType)}</td>
         <td>${escapeHtml(item.publishedAt.toISOString())}</td>
@@ -325,11 +410,31 @@ function buildHtmlReport(args: {
             ? `<a href="${escapeHtmlAttribute(item.url)}">${escapeHtml(item.title)}</a>`
             : escapeHtml(item.title)
         }</td>
-      </tr>
-    `,
+      </tr>`,
     )
     .join("");
 
+  return `<section class="panel">
+    <h2>Source Footnotes</h2>
+    <table>
+      <thead><tr><th>Source</th><th>Type</th><th>Published</th><th>Item</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </section>`;
+}
+
+function buildHtmlReport(args: {
+  horizon: IntelHorizon;
+  generatedAt: Date;
+  universeSummary: string;
+  stocks: StockIntel[];
+  rawItems: IntelRawItem[];
+  executiveSummary: string;
+  narrative: ReportNarrative | null;
+}) {
+  const rawById = new Map(args.rawItems.map((item) => [item.id, item]));
+  const hotStocks = args.stocks.filter((stock) => stock.score >= 60);
+  const lowConfidence = args.stocks.filter((stock) => stock.score < 60);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -337,31 +442,50 @@ function buildHtmlReport(args: {
   <title>Market Intel ${escapeHtml(args.horizon)}</title>
   <style>
     :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    body { margin: 0; background: #f6f7f9; color: #171a1f; }
-    main { max-width: 980px; margin: 0 auto; padding: 32px 20px 56px; }
-    header { margin-bottom: 24px; }
-    h1 { margin: 0 0 8px; font-size: 32px; line-height: 1.1; }
-    .meta { color: #667085; font-size: 14px; }
-    .summary { background: #ffffff; border: 1px solid #d9dee7; border-radius: 8px; padding: 18px 20px; margin: 18px 0 24px; }
-    .event { background: #ffffff; border: 1px solid #d9dee7; border-radius: 8px; padding: 18px 20px; margin: 14px 0; }
-    .event-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
-    .ticker { font-size: 13px; color: #344054; font-weight: 700; letter-spacing: .04em; }
-    h2 { margin: 4px 0 12px; font-size: 20px; line-height: 1.25; }
-    h3 { margin: 18px 0 8px; font-size: 14px; color: #344054; }
-    .score { min-width: 56px; text-align: center; border-radius: 8px; background: #171a1f; color: #fff; font-size: 22px; font-weight: 800; padding: 10px 8px; }
-    .tags, .metrics, .reasons { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
-    .tags span { background: #e8f0fe; color: #174ea6; border-radius: 999px; padding: 4px 9px; font-size: 12px; }
-    .metrics span { background: #eef6f1; color: #137333; border-radius: 999px; padding: 4px 9px; font-size: 12px; }
-    .reasons span { background: #f2f4f7; color: #475467; border-radius: 999px; padding: 4px 9px; font-size: 12px; }
-    p { line-height: 1.55; }
-    ol { margin: 8px 0 0 20px; padding: 0; }
-    li { margin: 8px 0; }
+    body { margin: 0; background: #f5f7fa; color: #161b22; }
+    main { max-width: 1120px; margin: 0 auto; padding: 28px 18px 56px; }
+    header { margin-bottom: 18px; }
+    h1 { margin: 0 0 6px; font-size: 30px; line-height: 1.1; }
+    h2 { margin: 0 0 12px; font-size: 20px; line-height: 1.25; }
+    h3 { margin: 18px 0 8px; font-size: 13px; color: #344054; text-transform: uppercase; letter-spacing: .04em; }
     a { color: #0b57d0; text-decoration: none; }
     a:hover { text-decoration: underline; }
-    .footnote { color: #667085; font-size: 12px; margin-top: 2px; }
-    table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #d9dee7; border-radius: 8px; overflow: hidden; }
-    th, td { border-bottom: 1px solid #eaecf0; padding: 8px 10px; text-align: left; vertical-align: top; font-size: 12px; }
+    .meta { color: #667085; font-size: 13px; }
+    .panel, .stock { background: #fff; border: 1px solid #d9dee7; border-radius: 8px; padding: 16px 18px; margin: 12px 0; }
+    .summary { font-size: 15px; line-height: 1.55; }
+    .stock-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .ticker { font-size: 20px; font-weight: 800; }
+    .ticker span { color: #667085; font-size: 14px; font-weight: 600; margin-left: 8px; }
+    .score { min-width: 58px; text-align: center; border-radius: 8px; color: #fff; font-size: 24px; font-weight: 900; padding: 10px 8px; background: #344054; }
+    .score.high { background: #137333; }
+    .score.medium { background: #b06000; }
+    .score.low { background: #667085; }
+    .pill { border-radius: 999px; padding: 3px 8px; color: #fff; font-size: 12px; font-weight: 700; }
+    .pill.high { background: #137333; }
+    .pill.medium { background: #b06000; }
+    .pill.low { background: #667085; }
+    .thesis { font-size: 15px; line-height: 1.55; margin: 8px 0 14px; }
+    .score-grid { display: grid; grid-template-columns: repeat(5, minmax(110px, 1fr)); gap: 8px; margin: 12px 0; }
+    .score-grid div, .metric { background: #f7f8fb; border: 1px solid #eaecf0; border-radius: 6px; padding: 8px 10px; }
+    .score-grid span, .metric span { display: block; color: #667085; font-size: 12px; }
+    .score-grid strong, .metric strong { font-size: 15px; }
+    .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .metrics { display: grid; grid-template-columns: repeat(2, minmax(130px, 1fr)); gap: 8px; }
+    ul { margin: 6px 0 0 20px; padding: 0; line-height: 1.45; }
+    .catalyst { border-left: 3px solid #d0d5dd; padding-left: 10px; margin: 10px 0; }
+    .catalyst strong { display: inline-block; margin-right: 8px; }
+    .catalyst span { color: #667085; font-size: 12px; }
+    .catalyst p { margin: 4px 0 0; line-height: 1.45; }
+    .evidence { margin: 6px 0 0 20px; padding: 0; }
+    .evidence li { margin: 7px 0; }
+    .evidence span { display: block; color: #667085; font-size: 12px; margin-top: 2px; }
+    table { width: 100%; border-collapse: collapse; background: #fff; }
+    th, td { border-bottom: 1px solid #eaecf0; padding: 8px 9px; text-align: left; vertical-align: top; font-size: 12px; }
     th { background: #f2f4f7; color: #344054; }
+    @media (max-width: 760px) {
+      .columns, .score-grid { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -370,16 +494,20 @@ function buildHtmlReport(args: {
       <h1>Market Intel ${escapeHtml(args.horizon)}</h1>
       <div class="meta">Generated ${escapeHtml(args.generatedAt.toLocaleString())} &middot; Universe ${escapeHtml(args.universeSummary)}</div>
     </header>
-    <section class="summary">
+    <section class="panel summary">
       <strong>Executive Summary</strong>
       <p>${escapeHtml(args.executiveSummary)}</p>
     </section>
-    ${cards || '<section class="event"><p>No ranked catalyst events found.</p></section>'}
-    <h2>Source Footnotes</h2>
-    <table>
-      <thead><tr><th>Source</th><th>Type</th><th>Published</th><th>Item</th></tr></thead>
-      <tbody>${rawRows}</tbody>
-    </table>
+    ${topTable(args.stocks)}
+    ${hotStocks.map((stock) => stockCardHtml(stock, rawById, args.narrative)).join("")}
+    ${
+      lowConfidence.length
+        ? `<section class="panel"><h2>Low Confidence / Rejected Edge</h2><p>These mentions had weaker evidence, missing market context, or insufficient source support.</p></section>${lowConfidence
+            .map((stock) => stockCardHtml(stock, rawById, args.narrative))
+            .join("")}`
+        : ""
+    }
+    ${sourceFootnotes(args.rawItems)}
   </main>
 </body>
 </html>`;
@@ -391,35 +519,30 @@ export async function buildIntelReport(args: {
   universeSummary: string;
   rawItems: IntelRawItem[];
   events: IntelEventCluster[];
+  stocks: StockIntel[];
   snapshots: MarketSnapshot[];
 }) {
   const generatedAt = new Date();
-  const snapshots = new Map(
-    args.snapshots.map((snapshot) => [snapshot.ticker, snapshot]),
-  );
   const narrative = await callReportModel(
     args.horizon,
-    args.events,
+    args.stocks,
     args.rawItems,
-    snapshots,
   );
-  const telegramSummary =
-    typeof narrative?.telegramSummary === "string" &&
-    narrative.telegramSummary.trim()
-      ? narrative.telegramSummary.trim().slice(0, 3500)
-      : buildFallbackTelegramSummary(args.horizon, args.events, snapshots);
   const executiveSummary =
     typeof narrative?.executiveSummary === "string" &&
     narrative.executiveSummary.trim()
       ? narrative.executiveSummary.trim()
-      : buildFallbackExecutiveSummary(args.events);
+      : buildFallbackExecutiveSummary(args.stocks);
+  const telegramSummary = buildFallbackTelegramSummary(
+    args.horizon,
+    args.stocks,
+  );
   const html = buildHtmlReport({
     horizon: args.horizon,
     generatedAt,
     universeSummary: args.universeSummary,
-    events: args.events,
+    stocks: args.stocks,
     rawItems: args.rawItems,
-    snapshots,
     executiveSummary,
     narrative,
   });
@@ -431,6 +554,7 @@ export async function buildIntelReport(args: {
     telegramSummary,
     executiveSummary,
     html,
+    stocks: args.stocks,
     events: args.events,
   } satisfies IntelReport;
 }

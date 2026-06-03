@@ -1,6 +1,8 @@
 import { clusterEvents } from "./dedupe.ts";
 import { rankEvents } from "./score.ts";
+import { buildStockIntel } from "./stock.ts";
 import type {
+  FundamentalSnapshot,
   IntelEventCandidate,
   IntelRawItem,
   MarketSnapshot,
@@ -103,5 +105,43 @@ Deno.test("rankEvents boosts watchlist names with strong market reaction", () =>
   assert(
     ranked[0].scoreReasons.includes("watchlist"),
     "expected watchlist reason",
+  );
+});
+
+Deno.test("buildStockIntel aggregates ranked catalysts into stock dossiers", () => {
+  const ranked = rankEvents(
+    clusterEvents(events, rawItems),
+    universe,
+    snapshots,
+  );
+  const fundamentals: FundamentalSnapshot[] = [
+    {
+      ticker: "MU",
+      source: "sec_companyfacts",
+      fetchedAt: now,
+      fiscalYear: 2025,
+      fiscalPeriod: "FY",
+      revenue: 25_000_000_000,
+      netIncome: 3_000_000_000,
+      epsDiluted: 8,
+      estimatedPe: 13.75,
+      cash: 8_000_000_000,
+      longTermDebt: 10_000_000_000,
+    },
+  ];
+
+  const stocks = buildStockIntel({
+    events: ranked,
+    universe,
+    snapshots,
+    fundamentals,
+  });
+
+  assert(stocks.length === 1, "expected one stock dossier");
+  assert(stocks[0].ticker === "MU", "expected MU stock dossier");
+  assert(stocks[0].evidenceItemIds.length === 2, "expected merged evidence");
+  assert(
+    stocks[0].score >= 70,
+    `expected usable score, got ${stocks[0].score}`,
   );
 });

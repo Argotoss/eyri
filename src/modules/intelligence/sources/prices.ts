@@ -51,6 +51,7 @@ async function fetchYahooHistory(ticker: string, horizon: IntelHorizon) {
     const chart = data.chart as JsonRecord | undefined;
     const results = chart?.result as JsonRecord[] | undefined;
     const result = results?.[0];
+    const meta = result?.meta as JsonRecord | undefined;
     const indicators = result?.indicators as JsonRecord | undefined;
     const quotes = indicators?.quote as JsonRecord[] | undefined;
     const quote = quotes?.[0];
@@ -76,7 +77,23 @@ async function fetchYahooHistory(ticker: string, horizon: IntelHorizon) {
           previousVolumes.length;
 
     return {
+      marketPrice: toNumber(meta?.regularMarketPrice),
       previousPrice,
+      previousClose:
+        toNumber(meta?.chartPreviousClose) ??
+        toNumber(meta?.regularMarketPreviousClose) ??
+        toNumber(meta?.previousClose),
+      dayHigh: toNumber(meta?.regularMarketDayHigh) ?? undefined,
+      dayLow: toNumber(meta?.regularMarketDayLow) ?? undefined,
+      fiftyTwoWeekHigh: toNumber(meta?.fiftyTwoWeekHigh) ?? undefined,
+      fiftyTwoWeekLow: toNumber(meta?.fiftyTwoWeekLow) ?? undefined,
+      marketVolume: toNumber(meta?.regularMarketVolume) ?? undefined,
+      companyName:
+        typeof meta?.longName === "string"
+          ? meta.longName
+          : typeof meta?.shortName === "string"
+            ? meta.shortName
+            : undefined,
       volume: latestVolume,
       averageVolume,
       volumeRatio:
@@ -100,24 +117,41 @@ export async function fetchMarketSnapshot(
   }
 
   const history = await fetchYahooHistory(ticker, horizon);
+  const validYahooPrice =
+    history?.marketPrice && history.marketPrice > 0
+      ? history.marketPrice
+      : undefined;
+  const quoteDeviation =
+    validYahooPrice !== undefined
+      ? Math.abs(quote.price - validYahooPrice) / validYahooPrice
+      : 0;
+  const useYahooPrice = validYahooPrice !== undefined && quoteDeviation > 0.3;
+  const price = useYahooPrice ? validYahooPrice : quote.price;
   const previousPrice =
-    horizon === "1d" ? quote.closePrice : history?.previousPrice;
+    horizon === "1d"
+      ? (history?.previousClose ?? quote.closePrice)
+      : history?.previousPrice;
   const percentChange =
     previousPrice && previousPrice > 0
-      ? ((quote.price - previousPrice) / previousPrice) * 100
+      ? ((price - previousPrice) / previousPrice) * 100
       : undefined;
 
   return {
     ticker: ticker.trim().toUpperCase(),
     horizon,
-    price: quote.price,
+    price,
     previousPrice,
-    closePrice: quote.closePrice,
+    closePrice: history?.previousClose ?? quote.closePrice,
     percentChange,
-    volume: history?.volume,
+    dayHigh: history?.dayHigh,
+    dayLow: history?.dayLow,
+    fiftyTwoWeekHigh: history?.fiftyTwoWeekHigh,
+    fiftyTwoWeekLow: history?.fiftyTwoWeekLow,
+    volume: history?.marketVolume ?? history?.volume,
     averageVolume: history?.averageVolume,
     volumeRatio: history?.volumeRatio,
-    provider: quote.provider,
+    companyName: history?.companyName,
+    provider: useYahooPrice ? "yahoo_chart_sanity" : quote.provider,
     sourceTicker: quote.sourceTicker,
     fetchedAt: new Date(),
   };

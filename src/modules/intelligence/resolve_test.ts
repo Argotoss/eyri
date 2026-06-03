@@ -22,6 +22,27 @@ const universe: UniverseEntry[] = [
     sources: ["sp500"],
     priority: 35,
   },
+  {
+    ticker: "NDAQ",
+    name: "Nasdaq",
+    aliases: ["Nasdaq Inc"],
+    sources: ["sp500"],
+    priority: 35,
+  },
+  {
+    ticker: "HAS",
+    name: "Hasbro",
+    aliases: ["Hasbro Inc"],
+    sources: ["sp500"],
+    priority: 35,
+  },
+  {
+    ticker: "MSFT",
+    name: "Microsoft",
+    aliases: ["Microsoft Corporation"],
+    sources: ["sp500"],
+    priority: 35,
+  },
 ];
 
 function rawItem(title: string, body = ""): IntelRawItem {
@@ -59,6 +80,45 @@ Deno.test("resolveRawItemMentions rejects ambiguous tickers without context", ()
   assert(
     !mentions.some((mention) => mention.ticker === "AI"),
     "AI phrase should not become AI ticker",
+  );
+});
+
+Deno.test("resolveRawItemMentions does not map NASDAQ exchange labels to NDAQ", () => {
+  const mentions = resolveRawItemMentions(
+    rawItem("Broadcom Q2 Earnings Preview - Broadcom ( NASDAQ : AVGO )"),
+    universe,
+  );
+
+  assert(
+    !mentions.some((mention) => mention.ticker === "NDAQ"),
+    "NASDAQ exchange label should not become NDAQ",
+  );
+});
+
+Deno.test("resolveRawItemMentions does not map common words to ambiguous tickers", () => {
+  const mentions = resolveRawItemMentions(
+    rawItem("Home Depot has changed its outlook"),
+    universe,
+  );
+
+  assert(
+    !mentions.some((mention) => mention.ticker === "HAS"),
+    "word has should not become HAS ticker",
+  );
+});
+
+Deno.test("resolveRawItemMentions ignores debug query labels", () => {
+  const mentions = resolveRawItemMentions(
+    rawItem(
+      "Bank of America reiterates Amazon stock forecast",
+      "Source: example.com\nQuery: ticker:MSFT",
+    ),
+    universe,
+  );
+
+  assert(
+    !mentions.some((mention) => mention.ticker === "MSFT"),
+    "debug query label should not force MSFT",
   );
 });
 

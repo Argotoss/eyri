@@ -34,6 +34,10 @@ type RawItemRow = {
   raw_hash: string;
 };
 
+type TableColumn = {
+  name: string;
+};
+
 function toChatId(chatId: string | number) {
   return String(chatId);
 }
@@ -87,6 +91,28 @@ function rowToRawItem(row: RawItemRow): IntelRawItem {
     rawPayload: row.raw_payload ? JSON.parse(row.raw_payload) : undefined,
     rawHash: row.raw_hash,
   };
+}
+
+function getTableColumns(database: Database, tableName: string) {
+  return database
+    .prepare(`PRAGMA table_info(${tableName})`)
+    .all() as TableColumn[];
+}
+
+function addColumnIfMissing(
+  database: Database,
+  tableName: string,
+  columnName: string,
+  definition: string,
+) {
+  const exists = getTableColumns(database, tableName).some(
+    (column) => column.name === columnName,
+  );
+  if (!exists) {
+    database.exec(
+      `ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`,
+    );
+  }
 }
 
 export function ensureIntelligenceSchema(database: Database) {
@@ -194,9 +220,14 @@ export function ensureIntelligenceSchema(database: Database) {
       previous_price REAL,
       close_price REAL,
       percent_change REAL,
+      day_high REAL,
+      day_low REAL,
+      fifty_two_week_high REAL,
+      fifty_two_week_low REAL,
       volume REAL,
       average_volume REAL,
       volume_ratio REAL,
+      company_name TEXT,
       provider TEXT,
       source_ticker TEXT,
       fetched_at TEXT NOT NULL
@@ -205,6 +236,27 @@ export function ensureIntelligenceSchema(database: Database) {
     CREATE INDEX IF NOT EXISTS intel_market_snapshots_ticker_horizon_idx
       ON intel_market_snapshots(ticker, horizon, fetched_at);
   `);
+
+  addColumnIfMissing(database, "intel_market_snapshots", "day_high", "REAL");
+  addColumnIfMissing(database, "intel_market_snapshots", "day_low", "REAL");
+  addColumnIfMissing(
+    database,
+    "intel_market_snapshots",
+    "fifty_two_week_high",
+    "REAL",
+  );
+  addColumnIfMissing(
+    database,
+    "intel_market_snapshots",
+    "fifty_two_week_low",
+    "REAL",
+  );
+  addColumnIfMissing(
+    database,
+    "intel_market_snapshots",
+    "company_name",
+    "TEXT",
+  );
 }
 
 export function getUniverseSettings(
@@ -487,13 +539,18 @@ export function saveMarketSnapshots(
       previous_price,
       close_price,
       percent_change,
+      day_high,
+      day_low,
+      fifty_two_week_high,
+      fifty_two_week_low,
       volume,
       average_volume,
       volume_ratio,
+      company_name,
       provider,
       source_ticker,
       fetched_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   for (const snapshot of snapshots) {
@@ -504,9 +561,14 @@ export function saveMarketSnapshots(
       snapshot.previousPrice ?? null,
       snapshot.closePrice ?? null,
       snapshot.percentChange ?? null,
+      snapshot.dayHigh ?? null,
+      snapshot.dayLow ?? null,
+      snapshot.fiftyTwoWeekHigh ?? null,
+      snapshot.fiftyTwoWeekLow ?? null,
       snapshot.volume ?? null,
       snapshot.averageVolume ?? null,
       snapshot.volumeRatio ?? null,
+      snapshot.companyName ?? null,
       snapshot.provider ?? null,
       snapshot.sourceTicker ?? null,
       snapshot.fetchedAt.toISOString(),
@@ -561,14 +623,14 @@ export function saveReport(
     ) VALUES (?, ?, ?, ?, ?, ?)
   `);
 
-  report.events.forEach((event, index) => {
+  report.stocks.forEach((stock, index) => {
     insertItem.run(
       reportId,
       index + 1,
-      event.ticker,
-      event.score,
-      event.clusterKey,
-      event.title,
+      stock.ticker,
+      stock.score,
+      stock.events[0]?.clusterKey ?? stock.ticker,
+      stock.verdict,
     );
   });
 

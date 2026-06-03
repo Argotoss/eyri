@@ -3,9 +3,11 @@ import { extractEvents } from "./extract.ts";
 import { buildIntelReport } from "./report.ts";
 import { resolveMentionsForItems } from "./resolve.ts";
 import { rankEvents } from "./score.ts";
+import { collectFundamentals } from "./sources/fundamentals.ts";
 import { collectGdeltItems } from "./sources/gdelt.ts";
 import { collectMarketSnapshots } from "./sources/prices.ts";
 import { collectSecItems } from "./sources/sec.ts";
+import { buildStockIntel } from "./stock.ts";
 import {
   createSourceRun,
   finishSourceRun,
@@ -110,12 +112,23 @@ export async function runIntelligenceReport({
     );
 
     const rankedEvents = rankEvents(clusters, universe, snapshots).slice(0, 30);
+    const fundamentals = await collectFundamentals(
+      [...new Set(rankedEvents.map((event) => event.ticker))],
+      snapshots,
+    );
+    const stocks = buildStockIntel({
+      events: rankedEvents,
+      universe,
+      snapshots,
+      fundamentals,
+    }).slice(0, 15);
     const report = await buildIntelReport({
       horizon,
       universe,
       universeSummary,
       rawItems,
       events: rankedEvents,
+      stocks,
       snapshots,
     });
     const reportId = saveReport(database, chatId, report);
@@ -123,6 +136,7 @@ export async function runIntelligenceReport({
       rawItemCount: rawItems.length,
       mentionCount: mentions.length,
       eventCount: rankedEvents.length,
+      stockCount: stocks.length,
       sourceDiagnostics: [...sourceDiagnostics, priceDiagnostic].map(
         (diagnostic) => ({
           source: diagnostic.source,

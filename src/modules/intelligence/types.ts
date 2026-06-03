@@ -118,12 +118,65 @@ export type MarketSnapshot = {
   previousPrice?: number;
   closePrice?: number;
   percentChange?: number;
+  dayHigh?: number;
+  dayLow?: number;
+  fiftyTwoWeekHigh?: number;
+  fiftyTwoWeekLow?: number;
   volume?: number;
   averageVolume?: number;
   volumeRatio?: number;
+  companyName?: string;
   provider?: string;
   sourceTicker?: string;
   fetchedAt: Date;
+};
+
+export type FundamentalSnapshot = {
+  ticker: string;
+  cik?: string;
+  source: "sec_companyfacts";
+  fetchedAt: Date;
+  fiscalYear?: number;
+  fiscalPeriod?: string;
+  revenue?: number;
+  revenuePeriod?: string;
+  netIncome?: number;
+  epsDiluted?: number;
+  estimatedPe?: number;
+  cash?: number;
+  longTermDebt?: number;
+  assets?: number;
+  liabilities?: number;
+  equity?: number;
+};
+
+export type StockConfidence = "high" | "medium" | "low";
+
+export type StockIntel = {
+  ticker: string;
+  companyName: string;
+  sector?: string;
+  sources: UniverseSource[];
+  score: number;
+  confidence: StockConfidence;
+  verdict: string;
+  thesis: string;
+  bullCase: string[];
+  bearCase: string[];
+  risks: string[];
+  scoreBreakdown: {
+    catalyst: number;
+    market: number;
+    relevance: number;
+    fundamentals: number;
+    riskPenalty: number;
+  };
+  market?: MarketSnapshot;
+  fundamentals?: FundamentalSnapshot;
+  events: IntelEventCluster[];
+  evidenceItemIds: number[];
+  sourceCount: number;
+  latestPublishedAt?: Date;
 };
 
 export type IntelReport = {
@@ -134,5 +187,6 @@ export type IntelReport = {
   telegramSummary: string;
   executiveSummary: string;
   html: string;
+  stocks: StockIntel[];
   events: IntelEventCluster[];
 };

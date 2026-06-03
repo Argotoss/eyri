@@ -213,14 +213,10 @@ function rawItemsFromArticles(
       url: article.url,
       publishedAt: parseGdeltDate(article.seendate),
       fetchedAt,
-      body: [
-        article.title,
-        article.domain ? `Source: ${article.domain}` : "",
-        `Query: ${queryLabel}`,
-      ]
+      body: [article.title, article.domain ? `Source: ${article.domain}` : ""]
         .filter(Boolean)
         .join("\n"),
-      rawPayload: article,
+      rawPayload: { ...article, queryLabel },
     }));
 }
 

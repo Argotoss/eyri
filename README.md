@@ -83,14 +83,18 @@ Prefer `/purchase` for new entries.
 `/intel` builds a manual market intelligence report for the current chat. The
 bot scans the command caller's portfolio, the chat watchlist, and the optional
 S&P 500 preset. It sends a concise group summary and attaches a readable HTML
-report with ranked catalysts, evidence links, SEC/news source details, and
-market metrics.
+report with ranked stock dossiers, confidence scores, market metrics,
+fundamental snapshots, catalyst summaries, and evidence links.
 
 The first information-layer sources are SEC EDGAR, GDELT news discovery, and
 the existing price providers. Extraction uses `INTEL_EXTRACT_MODEL` through
 OpenRouter when configured and falls back to rules if the model call fails.
 Report wording uses `INTEL_REPORT_MODEL` when configured while the HTML report
 itself is generated deterministically from structured data.
+
+Optional scan limits include `INTEL_SEC_TICKER_LIMIT`,
+`INTEL_FUNDAMENTAL_TICKER_LIMIT`, `INTEL_PRICE_TICKER_LIMIT`,
+`INTEL_GDELT_DIRECT_TICKER_LIMIT`, and `INTEL_GDELT_SP500_FOCUS_LIMIT`.
 
 ## Groups
 
