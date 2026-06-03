@@ -7,3 +7,6 @@ node_modules
 # Sensitive data
 .env
 data/
+
+# Runtime logs
+*.log
