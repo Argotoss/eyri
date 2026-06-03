@@ -6,6 +6,10 @@ export type IntelHorizon = (typeof INTEL_HORIZONS)[number];
 
 export type UniverseSource = "portfolio" | "watchlist" | "sp500" | "target";
 
+export const DEEP_RESEARCH_PRESETS = ["fast", "deep", "exhaustive"] as const;
+
+export type DeepResearchPreset = (typeof DEEP_RESEARCH_PRESETS)[number];
+
 export type UniverseEntry = {
   ticker: string;
   name: string;
@@ -42,6 +46,7 @@ export type IntelRawItemInput = {
   title: string;
   url?: string;
   publishedAt: Date;
+  discoveredAt?: Date;
   fetchedAt?: Date;
   body?: string;
   rawPayload?: unknown;
@@ -184,6 +189,40 @@ export type StockIntel = {
   latestPublishedAt?: Date;
 };
 
+export type ItemDistillation = {
+  rawItemId: number;
+  ticker: string;
+  topic: string;
+  relevance: number;
+  novelty: number;
+  sourceQuality: number;
+  catalystStrength: number;
+  direction: DirectionHint;
+  timeSensitivity: IntelHorizon | "low";
+  summary: string;
+  whyItMatters: string;
+  keyFacts: string[];
+  noiseReason?: string;
+  createdAt: Date;
+};
+
+export type EvidencePacket = {
+  id: string;
+  ticker: string;
+  topic: string;
+  title: string;
+  direction: DirectionHint;
+  score: number;
+  confidence: StockConfidence;
+  summary: string;
+  conclusion: string;
+  whyItMatters: string;
+  keyFacts: string[];
+  evidenceItemIds: number[];
+  sourceCount: number;
+  noiseRejectedCount: number;
+};
+
 export type DeepResearchTheme = {
   key: string;
   title: string;
@@ -196,19 +235,44 @@ export type DeepResearchTheme = {
   evidenceItemIds: number[];
   sourceCount: number;
   latestPublishedAt?: Date;
+  packetIds?: string[];
 };
 
 export type DeepResearchData = {
   ticker: string;
   companyName: string;
   horizon: IntelHorizon;
+  preset: DeepResearchPreset;
   rawItemCount: number;
   relevantItemCount: number;
   duplicateItemCount: number;
+  noiseRejectedCount: number;
   sourceCount: number;
+  evidencePackets: EvidencePacket[];
   themes: DeepResearchTheme[];
   diagnostics: SourceDiagnostic[];
   dataQuality: string[];
+};
+
+export type RunTiming = {
+  stage: string;
+  durationMs: number;
+  metadata?: Record<string, unknown>;
+};
+
+export type ModelUsage = {
+  stage: string;
+  model: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+  createdAt: Date;
+};
+
+export type ReportFile = {
+  path: string;
+  bytes: number;
 };
 
 export type IntelReport = {
@@ -222,4 +286,5 @@ export type IntelReport = {
   stocks: StockIntel[];
   events: IntelEventCluster[];
   deepResearch?: DeepResearchData;
+  file?: ReportFile;
 };

@@ -87,13 +87,17 @@ S&P 500 preset. It sends a concise group summary and attaches a readable HTML
 report with ranked stock dossiers, confidence scores, market metrics,
 fundamental snapshots, catalyst summaries, and evidence links.
 
-`/intel TICKER [1d|3d|14d]` runs the stock-agnostic deep research pipeline for a
-single requested ticker. It gathers ticker-specific SEC filings, GDELT articles,
-Alpaca/Benzinga news, Finnhub news/metrics/social summaries, Yahoo/Google RSS,
-Reddit search, StockTwits messages, optional full text from linked articles, and
-the existing price/fundamental snapshots. The attached report groups the
-evidence into research themes, source diagnostics, data quality warnings, and a
-source appendix.
+`/intel TICKER [1d|3d|14d] [fast|deep|exhaustive]` runs the stock-agnostic deep
+research pipeline for a single requested ticker. It gathers ticker-specific SEC
+filings, GDELT articles, Alpaca/Benzinga news, Finnhub news/metrics/social
+summaries, Yahoo/Google RSS, optional Reddit search, StockTwits messages,
+optional full text from linked articles, and the existing price/fundamental
+snapshots. The attached report is built from scored evidence packets, with raw
+source lists moved into expandable appendices.
+
+Every intelligence run persists raw fetched items, item distillations, evidence
+packets, timing rows, model token/cost estimates, and the rendered report file.
+Report artifacts default to `data/reports`.
 
 The first information-layer sources are SEC EDGAR, GDELT news discovery, and
 the existing price providers. Extraction uses `INTEL_EXTRACT_MODEL` through
@@ -101,9 +105,13 @@ OpenRouter when configured and falls back to rules if the model call fails.
 Report wording uses `INTEL_REPORT_MODEL` when configured while the HTML report
 itself is generated deterministically from structured data.
 
-Optional scan limits include `INTEL_SEC_TICKER_LIMIT`,
-`INTEL_FUNDAMENTAL_TICKER_LIMIT`, `INTEL_PRICE_TICKER_LIMIT`,
-`INTEL_GDELT_DIRECT_TICKER_LIMIT`, and `INTEL_GDELT_SP500_FOCUS_LIMIT`.
+Optional scan/source controls include `EYRI_REPORTS_DIR`,
+`INTEL_SEC_TICKER_LIMIT`, `INTEL_FUNDAMENTAL_TICKER_LIMIT`,
+`INTEL_PRICE_TICKER_LIMIT`, `INTEL_GDELT_DIRECT_TICKER_LIMIT`,
+`INTEL_GDELT_SP500_FOCUS_LIMIT`, `INTEL_GDELT_429_BACKOFF_MS`,
+`INTEL_FULLTEXT_LIMIT`, `INTEL_FULLTEXT_CONCURRENCY`,
+`INTEL_FULLTEXT_TIMEOUT_MS`, `REDDIT_BEARER_TOKEN`, and
+`INTEL_REDDIT_ALLOW_UNAUTH`.
 
 ## Groups
 

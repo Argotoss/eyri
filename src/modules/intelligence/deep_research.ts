@@ -1,11 +1,14 @@
 import type {
   DeepResearchData,
   DeepResearchTheme,
+  DeepResearchPreset,
   DirectionHint,
+  EvidencePacket,
   FundamentalSnapshot,
   IntelEventCluster,
   IntelHorizon,
   IntelRawItem,
+  ItemDistillation,
   MarketSnapshot,
   SourceDiagnostic,
   StockConfidence,
@@ -177,6 +180,7 @@ function buildTheme(
   key: string,
   events: IntelEventCluster[],
   rawItems: Map<number, IntelRawItem>,
+  packets: EvidencePacket[],
 ): DeepResearchTheme {
   const evidenceItemIds = unique(
     events.flatMap((event) => event.evidenceItemIds),
@@ -218,6 +222,9 @@ function buildTheme(
     evidenceItemIds,
     sourceCount,
     latestPublishedAt,
+    packetIds: packets
+      .filter((packet) => packet.topic === key)
+      .map((packet) => packet.id),
   };
 }
 
@@ -225,6 +232,7 @@ function dataQualityNotes(args: {
   rawItemCount: number;
   relevantItemCount: number;
   duplicateItemCount: number;
+  noiseRejectedCount: number;
   diagnostics: SourceDiagnostic[];
   market?: MarketSnapshot;
   fundamentals?: FundamentalSnapshot;
@@ -243,6 +251,11 @@ function dataQualityNotes(args: {
   if (args.duplicateItemCount > 0) {
     notes.push(
       `${args.duplicateItemCount} duplicate raw items were collapsed.`,
+    );
+  }
+  if (args.noiseRejectedCount > 0) {
+    notes.push(
+      `${args.noiseRejectedCount} low-signal items were rejected before synthesis.`,
     );
   }
   const failed = args.diagnostics.filter(
@@ -270,9 +283,12 @@ function dataQualityNotes(args: {
 export function buildDeepResearchData(args: {
   entry: UniverseEntry;
   horizon: IntelHorizon;
+  preset: DeepResearchPreset;
   rawItems: IntelRawItem[];
   relevantItemIds: number[];
   duplicateItemCount: number;
+  distillations: ItemDistillation[];
+  evidencePackets: EvidencePacket[];
   events: IntelEventCluster[];
   diagnostics: SourceDiagnostic[];
   market?: MarketSnapshot;
@@ -280,6 +296,9 @@ export function buildDeepResearchData(args: {
 }) {
   const rawById = new Map(args.rawItems.map((item) => [item.id, item]));
   const relevantSet = new Set(args.relevantItemIds);
+  const noiseRejectedCount = args.distillations.filter(
+    (item) => item.noiseReason,
+  ).length;
   const eventsByTheme = new Map<string, IntelEventCluster[]>();
   for (const event of args.events) {
     const evidence = event.evidenceItemIds
@@ -292,7 +311,9 @@ export function buildDeepResearchData(args: {
   }
 
   const themes = [...eventsByTheme.entries()]
-    .map(([key, events]) => buildTheme(key, events, rawById))
+    .map(([key, events]) =>
+      buildTheme(key, events, rawById, args.evidencePackets),
+    )
     .sort((themeA, themeB) => {
       if (themeA.score !== themeB.score) {
         return themeB.score - themeA.score;
@@ -307,16 +328,20 @@ export function buildDeepResearchData(args: {
     ticker: args.entry.ticker,
     companyName: args.market?.companyName ?? args.entry.name,
     horizon: args.horizon,
+    preset: args.preset,
     rawItemCount: args.rawItems.length,
     relevantItemCount: relevantSet.size,
     duplicateItemCount: args.duplicateItemCount,
+    noiseRejectedCount,
     sourceCount: unique(args.rawItems.map((item) => item.source)).length,
+    evidencePackets: args.evidencePackets,
     themes,
     diagnostics: args.diagnostics,
     dataQuality: dataQualityNotes({
       rawItemCount: args.rawItems.length,
       relevantItemCount: relevantSet.size,
       duplicateItemCount: args.duplicateItemCount,
+      noiseRejectedCount,
       diagnostics: args.diagnostics,
       market: args.market,
       fundamentals: args.fundamentals,

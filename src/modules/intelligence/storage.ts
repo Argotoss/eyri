@@ -1,10 +1,14 @@
 import type { Database } from "../database/setup.ts";
 import type {
   IntelHorizon,
+  ItemDistillation,
   IntelRawItem,
   IntelRawItemInput,
   IntelReport,
   MarketSnapshot,
+  ModelUsage,
+  EvidencePacket,
+  RunTiming,
   SourceDiagnostic,
   TickerMention,
   UniverseSettings,
@@ -28,6 +32,7 @@ type RawItemRow = {
   title: string;
   url: string | null;
   published_at: string;
+  discovered_at: string | null;
   fetched_at: string;
   body: string | null;
   raw_payload: string | null;
@@ -86,6 +91,7 @@ function rowToRawItem(row: RawItemRow): IntelRawItem {
     title: row.title,
     url: row.url ?? undefined,
     publishedAt: new Date(row.published_at),
+    discoveredAt: row.discovered_at ? new Date(row.discovered_at) : undefined,
     fetchedAt: new Date(row.fetched_at),
     body: row.body ?? undefined,
     rawPayload: row.raw_payload ? JSON.parse(row.raw_payload) : undefined,
@@ -167,6 +173,7 @@ export function ensureIntelligenceSchema(database: Database) {
       title TEXT NOT NULL,
       url TEXT,
       published_at TEXT NOT NULL,
+      discovered_at TEXT,
       fetched_at TEXT NOT NULL,
       body TEXT,
       raw_payload TEXT,
@@ -198,6 +205,8 @@ export function ensureIntelligenceSchema(database: Database) {
       summary_text TEXT NOT NULL,
       html TEXT NOT NULL,
       model_report TEXT,
+      file_path TEXT,
+      file_bytes INTEGER,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -235,8 +244,79 @@ export function ensureIntelligenceSchema(database: Database) {
 
     CREATE INDEX IF NOT EXISTS intel_market_snapshots_ticker_horizon_idx
       ON intel_market_snapshots(ticker, horizon, fetched_at);
+
+    CREATE TABLE IF NOT EXISTS intel_item_distillations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      raw_item_id INTEGER NOT NULL,
+      ticker TEXT NOT NULL,
+      topic TEXT NOT NULL,
+      relevance REAL NOT NULL,
+      novelty REAL NOT NULL,
+      source_quality REAL NOT NULL,
+      catalyst_strength REAL NOT NULL,
+      direction TEXT NOT NULL,
+      time_sensitivity TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      why_it_matters TEXT NOT NULL,
+      key_facts TEXT NOT NULL,
+      noise_reason TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE(raw_item_id, ticker),
+      FOREIGN KEY (raw_item_id) REFERENCES intel_raw_items(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS intel_item_distillations_ticker_idx
+      ON intel_item_distillations(ticker, created_at);
+
+    CREATE TABLE IF NOT EXISTS intel_evidence_packets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL,
+      packet_id TEXT NOT NULL,
+      ticker TEXT NOT NULL,
+      topic TEXT NOT NULL,
+      title TEXT NOT NULL,
+      direction TEXT NOT NULL,
+      score REAL NOT NULL,
+      confidence TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      conclusion TEXT NOT NULL,
+      why_it_matters TEXT NOT NULL,
+      key_facts TEXT NOT NULL,
+      evidence_item_ids TEXT NOT NULL,
+      source_count INTEGER NOT NULL,
+      noise_rejected_count INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(run_id, packet_id),
+      FOREIGN KEY (run_id) REFERENCES intel_source_runs(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS intel_run_timings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL,
+      stage TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      metadata TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (run_id) REFERENCES intel_source_runs(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS intel_model_usages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL,
+      stage TEXT NOT NULL,
+      model TEXT NOT NULL,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      total_tokens INTEGER,
+      cost_usd REAL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (run_id) REFERENCES intel_source_runs(id)
+    );
   `);
 
+  addColumnIfMissing(database, "intel_raw_items", "discovered_at", "TEXT");
+  addColumnIfMissing(database, "intel_reports", "file_path", "TEXT");
+  addColumnIfMissing(database, "intel_reports", "file_bytes", "INTEGER");
   addColumnIfMissing(database, "intel_market_snapshots", "day_high", "REAL");
   addColumnIfMissing(database, "intel_market_snapshots", "day_low", "REAL");
   addColumnIfMissing(
@@ -451,11 +531,12 @@ export async function saveRawItems(
       title,
       url,
       published_at,
+      discovered_at,
       fetched_at,
       body,
       raw_payload,
       raw_hash
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(raw_hash) DO NOTHING
   `);
   const select = database.prepare(`
@@ -467,6 +548,7 @@ export async function saveRawItems(
       title,
       url,
       published_at,
+      discovered_at,
       fetched_at,
       body,
       raw_payload,
@@ -485,6 +567,7 @@ export async function saveRawItems(
       item.title.trim(),
       item.url ?? null,
       item.publishedAt.toISOString(),
+      item.discoveredAt?.toISOString() ?? null,
       fetchedAt.toISOString(),
       item.body ?? null,
       stringifyPayload(item.rawPayload),
@@ -576,6 +659,202 @@ export function saveMarketSnapshots(
   }
 }
 
+export function saveItemDistillations(
+  database: Database,
+  distillations: ItemDistillation[],
+) {
+  ensureIntelligenceSchema(database);
+  const insert = database.prepare(`
+    INSERT INTO intel_item_distillations (
+      raw_item_id,
+      ticker,
+      topic,
+      relevance,
+      novelty,
+      source_quality,
+      catalyst_strength,
+      direction,
+      time_sensitivity,
+      summary,
+      why_it_matters,
+      key_facts,
+      noise_reason,
+      created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(raw_item_id, ticker) DO UPDATE SET
+      topic = excluded.topic,
+      relevance = excluded.relevance,
+      novelty = excluded.novelty,
+      source_quality = excluded.source_quality,
+      catalyst_strength = excluded.catalyst_strength,
+      direction = excluded.direction,
+      time_sensitivity = excluded.time_sensitivity,
+      summary = excluded.summary,
+      why_it_matters = excluded.why_it_matters,
+      key_facts = excluded.key_facts,
+      noise_reason = excluded.noise_reason,
+      created_at = excluded.created_at
+  `);
+
+  for (const item of distillations) {
+    insert.run(
+      item.rawItemId,
+      normalizeTicker(item.ticker),
+      item.topic,
+      item.relevance,
+      item.novelty,
+      item.sourceQuality,
+      item.catalystStrength,
+      item.direction,
+      item.timeSensitivity,
+      item.summary,
+      item.whyItMatters,
+      stringifyPayload(item.keyFacts),
+      item.noiseReason ?? null,
+      item.createdAt.toISOString(),
+    );
+  }
+}
+
+export function saveEvidencePackets(
+  database: Database,
+  runId: number,
+  packets: EvidencePacket[],
+) {
+  ensureIntelligenceSchema(database);
+  const insert = database.prepare(`
+    INSERT INTO intel_evidence_packets (
+      run_id,
+      packet_id,
+      ticker,
+      topic,
+      title,
+      direction,
+      score,
+      confidence,
+      summary,
+      conclusion,
+      why_it_matters,
+      key_facts,
+      evidence_item_ids,
+      source_count,
+      noise_rejected_count
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(run_id, packet_id) DO UPDATE SET
+      score = excluded.score,
+      confidence = excluded.confidence,
+      summary = excluded.summary,
+      conclusion = excluded.conclusion,
+      why_it_matters = excluded.why_it_matters,
+      key_facts = excluded.key_facts,
+      evidence_item_ids = excluded.evidence_item_ids,
+      source_count = excluded.source_count,
+      noise_rejected_count = excluded.noise_rejected_count
+  `);
+
+  for (const packet of packets) {
+    insert.run(
+      runId,
+      packet.id,
+      normalizeTicker(packet.ticker),
+      packet.topic,
+      packet.title,
+      packet.direction,
+      packet.score,
+      packet.confidence,
+      packet.summary,
+      packet.conclusion,
+      packet.whyItMatters,
+      stringifyPayload(packet.keyFacts),
+      stringifyPayload(packet.evidenceItemIds),
+      packet.sourceCount,
+      packet.noiseRejectedCount,
+    );
+  }
+}
+
+export function saveRunTimings(
+  database: Database,
+  runId: number,
+  timings: RunTiming[],
+) {
+  ensureIntelligenceSchema(database);
+  const insert = database.prepare(`
+    INSERT INTO intel_run_timings (
+      run_id,
+      stage,
+      duration_ms,
+      metadata
+    ) VALUES (?, ?, ?, ?)
+  `);
+
+  for (const timing of timings) {
+    insert.run(
+      runId,
+      timing.stage,
+      Math.round(timing.durationMs),
+      stringifyPayload(timing.metadata),
+    );
+  }
+}
+
+export function saveModelUsages(
+  database: Database,
+  runId: number,
+  usages: ModelUsage[],
+) {
+  ensureIntelligenceSchema(database);
+  const insert = database.prepare(`
+    INSERT INTO intel_model_usages (
+      run_id,
+      stage,
+      model,
+      input_tokens,
+      output_tokens,
+      total_tokens,
+      cost_usd,
+      created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (const usage of usages) {
+    insert.run(
+      runId,
+      usage.stage,
+      usage.model,
+      usage.inputTokens ?? null,
+      usage.outputTokens ?? null,
+      usage.totalTokens ?? null,
+      usage.costUsd ?? null,
+      usage.createdAt.toISOString(),
+    );
+  }
+}
+
+function reportTimestamp(report: IntelReport) {
+  return report.generatedAt.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+}
+
+function reportFileName(report: IntelReport, reportId: number) {
+  const timestamp = reportTimestamp(report);
+  const prefix = report.deepResearch
+    ? `deep-intel-${report.deepResearch.ticker}-${report.horizon}`
+    : `market-intel-${report.horizon}`;
+  return `${reportId}-${prefix}-${timestamp}.html`.replace(
+    /[^a-zA-Z0-9._-]/g,
+    "_",
+  );
+}
+
+function writeReportFile(report: IntelReport, reportId: number) {
+  const directory = Deno.env.get("EYRI_REPORTS_DIR") ?? "data/reports";
+  Deno.mkdirSync(directory, { recursive: true });
+  const filePath = `${directory}/${reportFileName(report, reportId)}`;
+  Deno.writeTextFileSync(filePath, report.html);
+  const bytes = new TextEncoder().encode(report.html).byteLength;
+  return { path: filePath, bytes };
+}
+
 export function saveReport(
   database: Database,
   chatId: string | number,
@@ -612,6 +891,15 @@ export function saveReport(
       }
     ).id,
   );
+  const file = writeReportFile(report, reportId);
+  database
+    .prepare(`
+      UPDATE intel_reports
+      SET file_path = ?,
+        file_bytes = ?
+      WHERE id = ?
+    `)
+    .run(file.path, file.bytes, reportId);
   const insertItem = database.prepare(`
     INSERT INTO intel_report_items (
       report_id,
@@ -634,5 +922,5 @@ export function saveReport(
     );
   });
 
-  return reportId;
+  return { id: reportId, file };
 }

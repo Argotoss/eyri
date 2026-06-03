@@ -7,6 +7,7 @@ import type {
   IntelRawItem,
   TickerMention,
 } from "./types.ts";
+import { recordModelUsage } from "./model_usage.ts";
 
 type OpenRouterMessage = {
   role: "system" | "user";
@@ -252,13 +253,17 @@ function parseJsonObject(value: string): ModelResponse | null {
   }
 }
 
-async function callOpenRouterJson(messages: OpenRouterMessage[]) {
+async function callOpenRouterJson(
+  messages: OpenRouterMessage[],
+  stage: string,
+) {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY")?.trim();
   if (!apiKey) {
     return null;
   }
 
   try {
+    const model = modelName();
     const response = await fetch(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -270,10 +275,11 @@ async function callOpenRouterJson(messages: OpenRouterMessage[]) {
           "X-Title": "Eyri Market Intelligence",
         },
         body: JSON.stringify({
-          model: modelName(),
+          model,
           messages,
           temperature: 0.1,
           response_format: { type: "json_object" },
+          usage: { include: true },
         }),
       },
     );
@@ -283,6 +289,7 @@ async function callOpenRouterJson(messages: OpenRouterMessage[]) {
     }
 
     const data = await response.json();
+    recordModelUsage({ stage, model, usage: data?.usage });
     const content = data?.choices?.[0]?.message?.content;
     return typeof content === "string" ? parseJsonObject(content) : null;
   } catch (error) {
@@ -387,23 +394,26 @@ export async function extractEvents(
     return fallbackEvents;
   }
 
-  const modelResponse = await callOpenRouterJson([
-    {
-      role: "system",
-      content:
-        'You extract stock-market catalyst events from raw source items. Return strict JSON only: {"events":[...]}. Every event must cite evidenceItemIds from the provided IDs and must include a specific title and summary. Do not make buy/sell recommendations.',
-    },
-    {
-      role: "user",
-      content: JSON.stringify({
-        horizon,
-        allowedEventTypes: EVENT_TYPES,
-        allowedDirections: DIRECTIONS,
-        allowedUrgencies: URGENCIES,
-        items: compact,
-      }),
-    },
-  ]);
+  const modelResponse = await callOpenRouterJson(
+    [
+      {
+        role: "system",
+        content:
+          'You extract stock-market catalyst events from raw source items. Return strict JSON only: {"events":[...]}. Every event must cite evidenceItemIds from the provided IDs and must include a specific title and summary. Do not make buy/sell recommendations.',
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          horizon,
+          allowedEventTypes: EVENT_TYPES,
+          allowedDirections: DIRECTIONS,
+          allowedUrgencies: URGENCIES,
+          items: compact,
+        }),
+      },
+    ],
+    "extract",
+  );
 
   const itemsById = new Map(items.map((item) => [item.id, item]));
   const modelEvents = (modelResponse?.events ?? [])
@@ -430,23 +440,26 @@ export async function extractEventsForDeepResearch(
   const modelEvents: IntelEventCandidate[] = [];
   for (let index = 0; index < compact.length; index += chunkSize) {
     const chunk = compact.slice(index, index + chunkSize);
-    const modelResponse = await callOpenRouterJson([
-      {
-        role: "system",
-        content:
-          'You extract stock-market catalyst events from one ticker research items. Return strict JSON only: {"events":[...]}. Every event must cite evidenceItemIds from the provided IDs and must include a specific title and summary. Prefer concrete facts, numbers, analyst changes, earnings/guidance, supply/demand, legal/regulatory, product/customer, and market-reaction evidence. Do not make buy/sell recommendations.',
-      },
-      {
-        role: "user",
-        content: JSON.stringify({
-          horizon,
-          allowedEventTypes: EVENT_TYPES,
-          allowedDirections: DIRECTIONS,
-          allowedUrgencies: URGENCIES,
-          items: chunk,
-        }),
-      },
-    ]);
+    const modelResponse = await callOpenRouterJson(
+      [
+        {
+          role: "system",
+          content:
+            'You extract stock-market catalyst events from one ticker research items. Return strict JSON only: {"events":[...]}. Every event must cite evidenceItemIds from the provided IDs and must include a specific title and summary. Prefer concrete facts, numbers, analyst changes, earnings/guidance, supply/demand, legal/regulatory, product/customer, and market-reaction evidence. Do not make buy/sell recommendations.',
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            horizon,
+            allowedEventTypes: EVENT_TYPES,
+            allowedDirections: DIRECTIONS,
+            allowedUrgencies: URGENCIES,
+            items: chunk,
+          }),
+        },
+      ],
+      "deep_extract",
+    );
 
     modelEvents.push(
       ...(modelResponse?.events ?? [])

@@ -1,6 +1,7 @@
 import type {
   IntelHorizon,
   IntelRawItemInput,
+  DeepResearchPreset,
   SourceCollectionResult,
   SourceDiagnostic,
   UniverseEntry,
@@ -73,6 +74,21 @@ function env(name: string) {
 function envNumber(name: string, fallback: number) {
   const value = Number(Deno.env.get(name));
   return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function envBoolean(name: string, fallback = false) {
+  const value = Deno.env.get(name)?.trim().toLowerCase();
+  if (!value) {
+    return fallback;
+  }
+  return ["1", "true", "yes", "on"].includes(value);
+}
+
+function presetLimit(
+  preset: DeepResearchPreset,
+  values: { fast: number; deep: number; exhaustive: number },
+) {
+  return values[preset];
 }
 
 function normalizeTicker(ticker: string) {
@@ -233,6 +249,7 @@ function parseRssItems(xml: string) {
 async function collectAlpacaNews(
   entry: UniverseEntry,
   horizon: IntelHorizon,
+  preset: DeepResearchPreset,
 ): Promise<SourceCollectionResult> {
   const startedAt = new Date();
   const apiKey = env("ALPACA_API_KEY");
@@ -254,8 +271,14 @@ async function collectAlpacaNews(
     };
   }
 
-  const limit = envNumber("INTEL_ALPACA_NEWS_LIMIT", 100);
-  const pageLimit = envNumber("INTEL_ALPACA_NEWS_PAGES", 2);
+  const limit = envNumber(
+    "INTEL_ALPACA_NEWS_LIMIT",
+    presetLimit(preset, { fast: 30, deep: 100, exhaustive: 200 }),
+  );
+  const pageLimit = envNumber(
+    "INTEL_ALPACA_NEWS_PAGES",
+    presetLimit(preset, { fast: 1, deep: 2, exhaustive: 4 }),
+  );
   const items: IntelRawItemInput[] = [];
   let nextPageToken: string | undefined;
   let status = 200;
@@ -328,6 +351,7 @@ async function collectAlpacaNews(
 async function collectFinnhub(
   entry: UniverseEntry,
   horizon: IntelHorizon,
+  _preset: DeepResearchPreset,
 ): Promise<SourceCollectionResult> {
   const startedAt = new Date();
   const apiKey = env("FINNHUB_API_KEY");
@@ -468,6 +492,7 @@ async function collectFinnhub(
 async function collectRss(
   entry: UniverseEntry,
   horizon: IntelHorizon,
+  preset: DeepResearchPreset,
 ): Promise<SourceCollectionResult> {
   const startedAt = new Date();
   const ticker = normalizeTicker(entry.ticker);
@@ -499,13 +524,18 @@ async function collectRss(
 
   const items: IntelRawItemInput[] = [];
   const diagnostics: SourceDiagnostic[] = [];
+  const perSourceLimit = presetLimit(preset, {
+    fast: 40,
+    deep: 100,
+    exhaustive: 200,
+  });
   for (const query of queries) {
     const result = await fetchText(query.url, {
       "User-Agent": "Eyri market intelligence",
     });
     const rssItems = result.text ? parseRssItems(result.text) : [];
     const fetchedAt = new Date();
-    for (const item of rssItems) {
+    for (const item of rssItems.slice(0, perSourceLimit)) {
       if (!item.title) {
         continue;
       }
@@ -543,6 +573,7 @@ async function collectRss(
 async function collectSocial(
   entry: UniverseEntry,
   horizon: IntelHorizon,
+  preset: DeepResearchPreset,
 ): Promise<SourceCollectionResult> {
   const startedAt = new Date();
   const ticker = normalizeTicker(entry.ticker);
@@ -550,61 +581,85 @@ async function collectSocial(
   const items: IntelRawItemInput[] = [];
   const diagnostics: SourceDiagnostic[] = [];
 
-  const redditUrl = new URL(REDDIT_SEARCH_URL);
-  redditUrl.searchParams.set("q", `${terms.join(" OR ")} stock`);
-  redditUrl.searchParams.set("sort", "new");
-  redditUrl.searchParams.set(
-    "t",
-    horizon === "1d" ? "day" : horizon === "3d" ? "week" : "month",
-  );
-  redditUrl.searchParams.set(
-    "limit",
-    String(envNumber("INTEL_REDDIT_LIMIT", 75)),
-  );
-  const reddit = await fetchJson<{ data?: { children?: RedditChild[] } }>(
-    redditUrl,
-    { "User-Agent": "Eyri market intelligence" },
-  );
   const fetchedAt = new Date();
-  const redditChildren = reddit.data?.data?.children ?? [];
-  for (const child of redditChildren) {
-    const post = child.data;
-    if (!post?.title) {
-      continue;
+  const redditBearer = env("REDDIT_BEARER_TOKEN");
+  if (redditBearer || envBoolean("INTEL_REDDIT_ALLOW_UNAUTH")) {
+    const redditUrl = new URL(REDDIT_SEARCH_URL);
+    redditUrl.searchParams.set("q", `${terms.join(" OR ")} stock`);
+    redditUrl.searchParams.set("sort", "new");
+    redditUrl.searchParams.set(
+      "t",
+      horizon === "1d" ? "day" : horizon === "3d" ? "week" : "month",
+    );
+    redditUrl.searchParams.set(
+      "limit",
+      String(
+        envNumber(
+          "INTEL_REDDIT_LIMIT",
+          presetLimit(preset, { fast: 25, deep: 75, exhaustive: 150 }),
+        ),
+      ),
+    );
+    const reddit = await fetchJson<{ data?: { children?: RedditChild[] } }>(
+      redditUrl,
+      {
+        "User-Agent": "Eyri market intelligence",
+        ...(redditBearer ? { Authorization: `Bearer ${redditBearer}` } : {}),
+      },
+    );
+    const redditChildren = reddit.data?.data?.children ?? [];
+    for (const child of redditChildren) {
+      const post = child.data;
+      if (!post?.title) {
+        continue;
+      }
+      items.push({
+        source: "reddit",
+        sourceType: "social",
+        sourceId: `reddit:${post.id ?? post.permalink ?? post.title}`,
+        title: post.title,
+        url: post.permalink
+          ? `https://www.reddit.com${post.permalink}`
+          : post.url,
+        publishedAt: parseDate(post.created_utc),
+        fetchedAt,
+        body: [
+          post.selftext,
+          post.subreddit ? `Subreddit: ${post.subreddit}` : "",
+          `Score: ${toNumber(post.score) ?? 0}; comments: ${
+            toNumber(post.num_comments) ?? 0
+          }`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        rawPayload: post,
+      });
     }
-    items.push({
-      source: "reddit",
-      sourceType: "social",
-      sourceId: `reddit:${post.id ?? post.permalink ?? post.title}`,
-      title: post.title,
-      url: post.permalink
-        ? `https://www.reddit.com${post.permalink}`
-        : post.url,
-      publishedAt: parseDate(post.created_utc),
-      fetchedAt,
-      body: [
-        post.selftext,
-        post.subreddit ? `Subreddit: ${post.subreddit}` : "",
-        `Score: ${toNumber(post.score) ?? 0}; comments: ${
-          toNumber(post.num_comments) ?? 0
-        }`,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      rawPayload: post,
-    });
+    diagnostics.push(
+      makeDiagnostic({
+        source: "reddit",
+        label: `ticker-social:${ticker}:reddit`,
+        startedAt,
+        status: reddit.data ? "ok" : "failed",
+        itemCount: redditChildren.length,
+        message: reddit.data ? undefined : `HTTP ${reddit.status}`,
+        metadata: { ticker, authenticated: Boolean(redditBearer) },
+      }),
+    );
+  } else {
+    diagnostics.push(
+      makeDiagnostic({
+        source: "reddit",
+        label: `ticker-social:${ticker}:reddit`,
+        startedAt,
+        status: "partial",
+        itemCount: 0,
+        message:
+          "Reddit search skipped; configure REDDIT_BEARER_TOKEN or INTEL_REDDIT_ALLOW_UNAUTH",
+        metadata: { ticker },
+      }),
+    );
   }
-  diagnostics.push(
-    makeDiagnostic({
-      source: "reddit",
-      label: `ticker-social:${ticker}:reddit`,
-      startedAt,
-      status: reddit.data ? "ok" : "failed",
-      itemCount: redditChildren.length,
-      message: reddit.data ? undefined : `HTTP ${reddit.status}`,
-      metadata: { ticker },
-    }),
-  );
 
   const stockTwitsUrl = new URL(
     `/api/2/streams/symbol/${encodeURIComponent(ticker)}.json`,
@@ -612,7 +667,12 @@ async function collectSocial(
   );
   stockTwitsUrl.searchParams.set(
     "limit",
-    String(envNumber("INTEL_STOCKTWITS_LIMIT", 30)),
+    String(
+      envNumber(
+        "INTEL_STOCKTWITS_LIMIT",
+        presetLimit(preset, { fast: 20, deep: 30, exhaustive: 60 }),
+      ),
+    ),
   );
   const stockTwits = await fetchJson<{ messages?: StockTwitsMessage[] }>(
     stockTwitsUrl,
@@ -661,12 +721,13 @@ async function collectSocial(
 export async function collectDeepSourceItems(
   entry: UniverseEntry,
   horizon: IntelHorizon,
+  preset: DeepResearchPreset = "deep",
 ): Promise<SourceCollectionResult> {
   const [alpaca, finnhub, rss, social] = await Promise.all([
-    collectAlpacaNews(entry, horizon),
-    collectFinnhub(entry, horizon),
-    collectRss(entry, horizon),
-    collectSocial(entry, horizon),
+    collectAlpacaNews(entry, horizon, preset),
+    collectFinnhub(entry, horizon, preset),
+    collectRss(entry, horizon, preset),
+    collectSocial(entry, horizon, preset),
   ]);
 
   return {

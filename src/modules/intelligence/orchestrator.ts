@@ -1,8 +1,10 @@
 import { clusterEvents } from "./dedupe.ts";
 import { buildDeepResearchData } from "./deep_research.ts";
 import { buildDeepIntelReport } from "./deep_report.ts";
+import { buildEvidencePackets, buildItemDistillations } from "./distill.ts";
 import { extractEvents, extractEventsForDeepResearch } from "./extract.ts";
 import { dedupeRawItemInputs } from "./items.ts";
+import { consumeModelUsages } from "./model_usage.ts";
 import { buildIntelReport } from "./report.ts";
 import { resolveMentionsForItems } from "./resolve.ts";
 import { rankEvents } from "./score.ts";
@@ -19,14 +21,20 @@ import {
   createSourceRun,
   finishSourceRun,
   saveMarketSnapshots,
+  saveEvidencePackets,
+  saveItemDistillations,
+  saveModelUsages,
   saveRawItems,
   saveReport,
+  saveRunTimings,
   saveSourceDiagnostics,
   saveTickerMentions,
 } from "./storage.ts";
 import type {
+  DeepResearchPreset,
   IntelRawItemInput,
   IntelligenceRunArgs,
+  RunTiming,
   SourceDiagnostic,
   UniverseEntry,
 } from "./types.ts";
@@ -110,6 +118,24 @@ function sourceDiagnostic(args: {
   };
 }
 
+async function timed<T>(
+  timings: RunTiming[],
+  stage: string,
+  fn: () => Promise<T>,
+  metadata?: Record<string, unknown>,
+) {
+  const startedAt = performance.now();
+  try {
+    return await fn();
+  } finally {
+    timings.push({
+      stage,
+      durationMs: performance.now() - startedAt,
+      metadata,
+    });
+  }
+}
+
 export async function runIntelligenceReport({
   database,
   chatId,
@@ -117,14 +143,20 @@ export async function runIntelligenceReport({
   horizon,
 }: IntelligenceRunArgs) {
   const runId = createSourceRun(database, chatId, horizon);
+  const timings: RunTiming[] = [];
+  consumeModelUsages();
   try {
     console.log(`[intel] run ${runId} started (${horizon}) chat=${chatId}`);
-    const universe = await buildUniverse(database, chatId, user);
+    const universe = await timed(timings, "build-universe", () =>
+      buildUniverse(database, chatId, user),
+    );
     const universeSummary = summarizeUniverse(universe);
-    const [secResult, gdeltResult] = await Promise.all([
-      collectSecItems(universe, horizon),
-      collectGdeltItems(universe, horizon),
-    ]);
+    const [secResult, gdeltResult] = await timed(timings, "source-fetch", () =>
+      Promise.all([
+        collectSecItems(universe, horizon),
+        collectGdeltItems(universe, horizon),
+      ]),
+    );
     const sourceDiagnostics = [
       ...secResult.diagnostics,
       ...gdeltResult.diagnostics,
@@ -138,20 +170,30 @@ export async function runIntelligenceReport({
         )
         .join(", ")}`,
     );
-    const rawItems = await saveRawItems(
-      database,
-      uniqueRawItems([...secResult.items, ...gdeltResult.items]),
+    const rawItems = await timed(timings, "save-raw-items", () =>
+      saveRawItems(
+        database,
+        uniqueRawItems([...secResult.items, ...gdeltResult.items]),
+      ),
     );
-    const mentions = resolveMentionsForItems(rawItems, universe);
+    const mentions = await timed(timings, "resolve-mentions", async () =>
+      resolveMentionsForItems(rawItems, universe),
+    );
     saveTickerMentions(database, mentions);
-    const extractedEvents = await extractEvents(rawItems, mentions, horizon);
-    const clusters = clusterEvents(extractedEvents, rawItems);
+    const extractedEvents = await timed(timings, "extract-events", () =>
+      extractEvents(rawItems, mentions, horizon),
+    );
+    const clusters = await timed(timings, "cluster-events", async () =>
+      clusterEvents(extractedEvents, rawItems),
+    );
     const tickers = candidateSnapshotTickers(
       universe,
       clusters.map((cluster) => cluster.ticker),
     );
     const priceStartedAt = new Date();
-    const snapshots = await collectMarketSnapshots(tickers, horizon);
+    const snapshots = await timed(timings, "prices", () =>
+      collectMarketSnapshots(tickers, horizon),
+    );
     saveMarketSnapshots(database, snapshots);
     const priceDiagnostic: SourceDiagnostic = {
       source: "prices",
@@ -170,32 +212,48 @@ export async function runIntelligenceReport({
       `[intel] run ${runId} prices: ${snapshots.length}/${tickers.length}`,
     );
 
-    const rankedEvents = rankEvents(clusters, universe, snapshots).slice(0, 30);
-    const fundamentals = await collectFundamentals(
-      [...new Set(rankedEvents.map((event) => event.ticker))],
-      snapshots,
+    const rankedEvents = await timed(timings, "rank-events", async () =>
+      rankEvents(clusters, universe, snapshots).slice(0, 30),
     );
-    const stocks = buildStockIntel({
-      events: rankedEvents,
-      universe,
-      snapshots,
-      fundamentals,
-    }).slice(0, 15);
-    const report = await buildIntelReport({
-      horizon,
-      universe,
-      universeSummary,
-      rawItems,
-      events: rankedEvents,
-      stocks,
-      snapshots,
-    });
-    const reportId = saveReport(database, chatId, report);
+    const fundamentals = await timed(timings, "fundamentals", () =>
+      collectFundamentals(
+        [...new Set(rankedEvents.map((event) => event.ticker))],
+        snapshots,
+      ),
+    );
+    const stocks = await timed(timings, "build-stock-intel", async () =>
+      buildStockIntel({
+        events: rankedEvents,
+        universe,
+        snapshots,
+        fundamentals,
+      }).slice(0, 15),
+    );
+    const report = await timed(timings, "build-report", () =>
+      buildIntelReport({
+        horizon,
+        universe,
+        universeSummary,
+        rawItems,
+        events: rankedEvents,
+        stocks,
+        snapshots,
+      }),
+    );
+    const savedReport = await timed(timings, "save-report", async () =>
+      saveReport(database, chatId, report),
+    );
+    saveRunTimings(database, runId, timings);
+    saveModelUsages(database, runId, consumeModelUsages());
     finishSourceRun(database, runId, "complete", {
       rawItemCount: rawItems.length,
       mentionCount: mentions.length,
       eventCount: rankedEvents.length,
       stockCount: stocks.length,
+      timings: timings.map((timing) => ({
+        stage: timing.stage,
+        durationMs: Math.round(timing.durationMs),
+      })),
       sourceDiagnostics: [...sourceDiagnostics, priceDiagnostic].map(
         (diagnostic) => ({
           source: diagnostic.source,
@@ -205,20 +263,26 @@ export async function runIntelligenceReport({
           message: diagnostic.message,
         }),
       ),
-      reportId,
+      reportId: savedReport.id,
     });
     console.log(
-      `[intel] run ${runId} complete raw=${rawItems.length} mentions=${mentions.length} events=${rankedEvents.length} report=${reportId}`,
+      `[intel] run ${runId} complete raw=${rawItems.length} mentions=${mentions.length} events=${rankedEvents.length} report=${savedReport.id}`,
     );
 
-    return { ...report, id: reportId };
+    return { ...report, id: savedReport.id, file: savedReport.file };
   } catch (error) {
     console.error(
       `[intel] run ${runId} failed: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
+    saveRunTimings(database, runId, timings);
+    saveModelUsages(database, runId, consumeModelUsages());
     finishSourceRun(database, runId, "failed", {
+      timings: timings.map((timing) => ({
+        stage: timing.stage,
+        durationMs: Math.round(timing.durationMs),
+      })),
       error: error instanceof Error ? error.message : String(error),
     });
     throw error;
@@ -231,18 +295,25 @@ export async function runDeepIntelligenceReport({
   user,
   horizon,
   ticker,
-}: IntelligenceRunArgs & { ticker: string }) {
+  preset = "deep",
+}: IntelligenceRunArgs & { ticker: string; preset?: DeepResearchPreset }) {
   const normalizedTicker = normalizeTicker(ticker);
   const researchTicker = researchTickerFor(ticker);
   const runId = createSourceRun(database, chatId, horizon);
+  const timings: RunTiming[] = [];
+  consumeModelUsages();
   try {
     console.log(
-      `[intel] deep run ${runId} started (${horizon}) chat=${chatId} ticker=${normalizedTicker}`,
+      `[intel] deep run ${runId} started (${horizon}/${preset}) chat=${chatId} ticker=${normalizedTicker}`,
     );
-    const universe = await buildUniverse(database, chatId, user);
+    const universe = await timed(timings, "build-universe", () =>
+      buildUniverse(database, chatId, user),
+    );
 
     const priceStartedAt = new Date();
-    const snapshots = await collectMarketSnapshots([normalizedTicker], horizon);
+    const snapshots = await timed(timings, "prices", () =>
+      collectMarketSnapshots([normalizedTicker], horizon),
+    );
     saveMarketSnapshots(database, snapshots);
     const priceDiagnostic = sourceDiagnostic({
       source: "prices",
@@ -262,9 +333,8 @@ export async function runDeepIntelligenceReport({
     }));
     const entry = targetEntryFor(researchTicker, universe, reportSnapshots);
     const fundamentalsStartedAt = new Date();
-    const fundamentals = await collectFundamentals(
-      [entry.ticker],
-      reportSnapshots,
+    const fundamentals = await timed(timings, "fundamentals", () =>
+      collectFundamentals([entry.ticker], reportSnapshots),
     );
     const fundamentalsDiagnostic = sourceDiagnostic({
       source: "fundamentals",
@@ -275,18 +345,26 @@ export async function runDeepIntelligenceReport({
       metadata: { ticker: entry.ticker },
     });
 
-    const [secResult, gdeltResult, deepSourceResult] = await Promise.all([
-      collectSecItemsForTicker(entry, horizon),
-      collectGdeltItemsForTicker(entry, horizon),
-      collectDeepSourceItems(entry, horizon),
-    ]);
+    const [secResult, gdeltResult, deepSourceResult] = await timed(
+      timings,
+      "source-fetch",
+      () =>
+        Promise.all([
+          collectSecItemsForTicker(entry, horizon),
+          collectGdeltItemsForTicker(entry, horizon, preset),
+          collectDeepSourceItems(entry, horizon, preset),
+        ]),
+      { preset },
+    );
     const sourceItems = [
       ...secResult.items,
       ...gdeltResult.items,
       ...deepSourceResult.items,
     ];
     const deduped = dedupeRawItemInputs(sourceItems);
-    const fullTextResult = await enrichItemsWithFullText(deduped.items);
+    const fullTextResult = await timed(timings, "fulltext", () =>
+      enrichItemsWithFullText(deduped.items, preset),
+    );
     const allDiagnostics = [
       priceDiagnostic,
       fundamentalsDiagnostic,
@@ -305,8 +383,12 @@ export async function runDeepIntelligenceReport({
         .join(", ")}`,
     );
 
-    const rawItems = await saveRawItems(database, fullTextResult.items);
-    const mentions = resolveMentionsForItems(rawItems, [entry]);
+    const rawItems = await timed(timings, "save-raw-items", () =>
+      saveRawItems(database, fullTextResult.items),
+    );
+    const mentions = await timed(timings, "resolve-mentions", async () =>
+      resolveMentionsForItems(rawItems, [entry]),
+    );
     saveTickerMentions(database, mentions);
     const relevantItemIds = [
       ...new Set(
@@ -322,22 +404,41 @@ export async function runDeepIntelligenceReport({
     const relevantMentions = mentions.filter((mention) =>
       relevantIdSet.has(mention.rawItemId),
     );
-    const extractedEvents = await extractEventsForDeepResearch(
-      relevantRawItems,
-      relevantMentions,
-      horizon,
+    const distillations = await timed(timings, "distill-items", async () =>
+      buildItemDistillations({
+        rawItems,
+        mentions,
+        entry,
+        horizon,
+      }),
     );
-    const clusters = clusterEvents(extractedEvents, relevantRawItems);
-    const rankedEvents = rankEvents(clusters, [entry], reportSnapshots).slice(
-      0,
-      80,
+    saveItemDistillations(database, distillations);
+    const evidencePackets = await timed(
+      timings,
+      "build-evidence-packets",
+      async () =>
+        buildEvidencePackets({
+          ticker: entry.ticker,
+          distillations,
+          rawItems,
+        }),
     );
-    const stocks = buildStockIntel({
-      events: rankedEvents,
-      universe: [entry],
-      snapshots: reportSnapshots,
-      fundamentals,
+    saveEvidencePackets(database, runId, evidencePackets);
+    const extractedEvents = await timed(timings, "extract-events", () =>
+      extractEventsForDeepResearch(relevantRawItems, relevantMentions, horizon),
+    );
+    const rankedEvents = await timed(timings, "rank-events", async () => {
+      const clusters = clusterEvents(extractedEvents, relevantRawItems);
+      return rankEvents(clusters, [entry], reportSnapshots).slice(0, 80);
     });
+    const stocks = await timed(timings, "build-stock-intel", async () =>
+      buildStockIntel({
+        events: rankedEvents,
+        universe: [entry],
+        snapshots: reportSnapshots,
+        fundamentals,
+      }),
+    );
     const stock =
       stocks[0] ??
       ({
@@ -369,33 +470,49 @@ export async function runDeepIntelligenceReport({
     const research = buildDeepResearchData({
       entry,
       horizon,
+      preset,
       rawItems,
       relevantItemIds,
       duplicateItemCount: deduped.duplicateCount,
+      distillations,
+      evidencePackets,
       events: rankedEvents,
       diagnostics: allDiagnostics,
       market: reportSnapshots[0],
       fundamentals: fundamentals[0],
     });
-    const report = await buildDeepIntelReport({
-      entry,
-      horizon,
-      rawItems,
-      relevantItemIds,
-      events: rankedEvents,
-      stock,
-      research,
-    });
-    const reportId = saveReport(database, chatId, report);
+    const report = await timed(timings, "build-report", () =>
+      buildDeepIntelReport({
+        entry,
+        horizon,
+        rawItems,
+        relevantItemIds,
+        events: rankedEvents,
+        stock,
+        research,
+      }),
+    );
+    const savedReport = await timed(timings, "save-report", async () =>
+      saveReport(database, chatId, report),
+    );
+    saveRunTimings(database, runId, timings);
+    saveModelUsages(database, runId, consumeModelUsages());
     finishSourceRun(database, runId, "complete", {
       mode: "deep",
+      preset,
       ticker: entry.ticker,
       rawItemCount: rawItems.length,
       relevantItemCount: relevantItemIds.length,
       duplicateItemCount: deduped.duplicateCount,
+      noiseRejectedCount: research.noiseRejectedCount,
       mentionCount: mentions.length,
       eventCount: rankedEvents.length,
+      evidencePacketCount: evidencePackets.length,
       themeCount: research.themes.length,
+      timings: timings.map((timing) => ({
+        stage: timing.stage,
+        durationMs: Math.round(timing.durationMs),
+      })),
       sourceDiagnostics: allDiagnostics.map((diagnostic) => ({
         source: diagnostic.source,
         label: diagnostic.label,
@@ -403,22 +520,29 @@ export async function runDeepIntelligenceReport({
         itemCount: diagnostic.itemCount,
         message: diagnostic.message,
       })),
-      reportId,
+      reportId: savedReport.id,
     });
     console.log(
-      `[intel] deep run ${runId} complete raw=${rawItems.length} relevant=${relevantItemIds.length} events=${rankedEvents.length} themes=${research.themes.length} report=${reportId}`,
+      `[intel] deep run ${runId} complete raw=${rawItems.length} relevant=${relevantItemIds.length} events=${rankedEvents.length} themes=${research.themes.length} report=${savedReport.id}`,
     );
 
-    return { ...report, id: reportId };
+    return { ...report, id: savedReport.id, file: savedReport.file };
   } catch (error) {
     console.error(
       `[intel] deep run ${runId} failed: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
+    saveRunTimings(database, runId, timings);
+    saveModelUsages(database, runId, consumeModelUsages());
     finishSourceRun(database, runId, "failed", {
       mode: "deep",
+      preset,
       ticker: normalizedTicker,
+      timings: timings.map((timing) => ({
+        stage: timing.stage,
+        durationMs: Math.round(timing.durationMs),
+      })),
       error: error instanceof Error ? error.message : String(error),
     });
     throw error;

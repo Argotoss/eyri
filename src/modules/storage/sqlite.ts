@@ -22,5 +22,9 @@ export async function getDatabase() {
   await Deno.mkdir(getParentDirectory(path), { recursive: true });
 
   database = new Database(path);
+  database.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA busy_timeout = 10000;
+  `);
   return database;
 }

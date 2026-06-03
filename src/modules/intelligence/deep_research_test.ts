@@ -1,8 +1,10 @@
 import { buildDeepResearchData } from "./deep_research.ts";
+import { buildEvidencePackets, buildItemDistillations } from "./distill.ts";
 import type {
   IntelEventCluster,
   IntelRawItem,
   SourceDiagnostic,
+  TickerMention,
   UniverseEntry,
 } from "./types.ts";
 
@@ -89,17 +91,38 @@ Deno.test("buildDeepResearchData aggregates stock evidence into themes", () => {
       completedAt: now,
     },
   ];
+  const mentions: TickerMention[] = rawItems.map((item) => ({
+    rawItemId: item.id,
+    ticker: "MU",
+    confidence: 0.98,
+    method: "source",
+  }));
+  const distillations = buildItemDistillations({
+    rawItems,
+    mentions,
+    entry,
+    horizon: "1d",
+  });
+  const evidencePackets = buildEvidencePackets({
+    ticker: "MU",
+    distillations,
+    rawItems,
+  });
 
   const research = buildDeepResearchData({
     entry,
     horizon: "1d",
+    preset: "deep",
     rawItems,
     relevantItemIds: [1, 2],
     duplicateItemCount: 0,
+    distillations,
+    evidencePackets,
     events,
     diagnostics,
   });
 
+  assert(research.evidencePackets.length > 0, "expected evidence packets");
   assert(research.themes.length === 2, "expected two themes");
   assert(
     research.themes.some((theme) => theme.key === "supply_demand"),

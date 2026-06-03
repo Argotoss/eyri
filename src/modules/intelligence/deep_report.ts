@@ -11,6 +11,7 @@ import type {
   StockIntel,
   UniverseEntry,
 } from "./types.ts";
+import { recordModelUsage } from "./model_usage.ts";
 
 type DeepNarrative = {
   executiveSummary?: unknown;
@@ -75,6 +76,21 @@ function formatAge(date: Date, now: Date) {
     return `${hours.toFixed(1)}h ago`;
   }
   return `${(hours / 24).toFixed(1)}d ago`;
+}
+
+function sourceTimeLabel(item: IntelRawItem) {
+  const now = new Date();
+  if (
+    item.source === "gdelt" &&
+    item.discoveredAt &&
+    item.discoveredAt.getTime() === item.publishedAt.getTime()
+  ) {
+    return `seen by GDELT ${formatAge(item.discoveredAt, now)}`;
+  }
+  if (item.discoveredAt) {
+    return `published ${formatAge(item.publishedAt, now)}; seen ${formatAge(item.discoveredAt, now)}`;
+  }
+  return `published ${formatAge(item.publishedAt, now)}`;
 }
 
 function modelName() {
@@ -165,6 +181,7 @@ async function callDeepNarrativeModel(args: {
   };
 
   try {
+    const model = modelName();
     const response = await fetch(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -176,7 +193,7 @@ async function callDeepNarrativeModel(args: {
           "X-Title": "Eyri Deep Market Intelligence",
         },
         body: JSON.stringify({
-          model: modelName(),
+          model,
           messages: [
             {
               role: "system",
@@ -187,6 +204,7 @@ async function callDeepNarrativeModel(args: {
           ],
           temperature: 0.15,
           response_format: { type: "json_object" },
+          usage: { include: true },
         }),
       },
     );
@@ -195,6 +213,7 @@ async function callDeepNarrativeModel(args: {
       return null;
     }
     const data = await response.json();
+    recordModelUsage({ stage: "deep_report", model, usage: data?.usage });
     const content = data?.choices?.[0]?.message?.content;
     return typeof content === "string" ? parseJsonObject(content) : null;
   } catch (error) {
@@ -207,11 +226,13 @@ function fallbackExecutiveSummary(
   stock: StockIntel,
   research: DeepResearchData,
 ) {
-  const topThemes = research.themes
+  const topPackets = research.evidencePackets
     .slice(0, 3)
-    .map((theme) => `${theme.title} (${theme.score}/100, ${theme.direction})`)
+    .map(
+      (packet) => `${packet.title} (${packet.score}/100, ${packet.direction})`,
+    )
     .join("; ");
-  return `${stock.ticker} deep scan collected ${research.rawItemCount} raw items, kept ${research.relevantItemCount} relevant items, and found ${research.themes.length} research themes. Top themes: ${topThemes || "none"}.`;
+  return `${stock.ticker} deep scan collected ${research.rawItemCount} raw items, kept ${research.relevantItemCount} relevant items, rejected ${research.noiseRejectedCount} low-signal items, and produced ${research.evidencePackets.length} evidence packets. Top evidence: ${topPackets || "none"}.`;
 }
 
 function themeNote(theme: DeepResearchTheme, narrative: DeepNarrative | null) {
@@ -225,20 +246,20 @@ function telegramSummary(args: {
   research: DeepResearchData;
   executiveSummary: string;
 }) {
-  const topThemes = args.research.themes
+  const topPackets = args.research.evidencePackets
     .slice(0, 4)
     .map(
-      (theme, index) =>
-        `${index + 1}. ${theme.title}: ${theme.score}/100 ${theme.direction}`,
+      (packet, index) =>
+        `${index + 1}. ${packet.title}: ${packet.score}/100 ${packet.direction}`,
     )
     .join("\n");
 
   return [
     `Deep Intel ${args.stock.ticker}`,
-    `${args.research.rawItemCount} raw / ${args.research.relevantItemCount} relevant / ${args.research.sourceCount} sources`,
+    `${args.research.rawItemCount} raw / ${args.research.relevantItemCount} relevant / ${args.research.noiseRejectedCount} noise / ${args.research.sourceCount} sources`,
     `${args.stock.verdict} (${args.stock.score}/100, ${args.stock.confidence})`,
     "",
-    topThemes || "No strong themes extracted.",
+    topPackets || "No strong evidence packets extracted.",
     "",
     args.research.dataQuality[0],
     "Full research report attached.",
@@ -303,10 +324,53 @@ function evidenceList(
       const link = item.url
         ? `<a href="${escapeHtmlAttribute(item.url)}">${escapeHtml(item.title)}</a>`
         : escapeHtml(item.title);
-      return `<li>${link}<span>${escapeHtml(item.source)} - ${formatAge(item.publishedAt, new Date())}</span></li>`;
+      return `<li>${link}<span>${escapeHtml(item.source)} - ${escapeHtml(sourceTimeLabel(item))}</span></li>`;
     })
     .filter(Boolean)
     .join("");
+}
+
+function packetCard(
+  packet: DeepResearchData["evidencePackets"][number],
+  rawById: Map<number, IntelRawItem>,
+) {
+  const evidence = packet.evidenceItemIds
+    .slice(0, 8)
+    .map((id) => {
+      const item = rawById.get(id);
+      if (!item) {
+        return "";
+      }
+      const link = item.url
+        ? `<a href="${escapeHtmlAttribute(item.url)}">${escapeHtml(item.title)}</a>`
+        : escapeHtml(item.title);
+      return `<li>${link}<span>${escapeHtml(item.source)} - ${escapeHtml(sourceTimeLabel(item))}</span></li>`;
+    })
+    .filter(Boolean)
+    .join("");
+  const facts = packet.keyFacts.length
+    ? `<ul>${packet.keyFacts
+        .slice(0, 6)
+        .map((fact) => `<li>${escapeHtml(fact)}</li>`)
+        .join("")}</ul>`
+    : "<p>No concrete numeric facts extracted.</p>";
+
+  return `<section class="packet">
+    <div class="theme-head">
+      <div>
+        <h2>${escapeHtml(packet.title)}</h2>
+        <div class="meta">${escapeHtml(packet.direction)} / ${escapeHtml(packet.confidence)} / ${packet.sourceCount} source${packet.sourceCount === 1 ? "" : "s"} / ${packet.noiseRejectedCount} rejected</div>
+      </div>
+      <div class="score">${packet.score}</div>
+    </div>
+    <p><strong>Conclusion:</strong> ${escapeHtml(packet.conclusion)}</p>
+    <p>${escapeHtml(packet.summary)}</p>
+    <p class="why">${escapeHtml(packet.whyItMatters)}</p>
+    <h3>Key Facts</h3>
+    ${facts}
+    <h3>Best Evidence</h3>
+    <ol class="evidence">${evidence}</ol>
+  </section>`;
 }
 
 function themeCard(
@@ -346,13 +410,14 @@ function diagnosticsTable(diagnostics: SourceDiagnostic[]) {
       </tr>`,
     )
     .join("");
-  return `<section class="panel">
+  return `<details class="panel">
+    <summary>Source Diagnostics</summary>
     <h2>Source Diagnostics</h2>
     <table>
       <thead><tr><th>Source</th><th>Step</th><th>Status</th><th>Items</th><th>Message</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
-  </section>`;
+  </details>`;
 }
 
 function sourceAppendix(rawItems: IntelRawItem[], relevantIds: Set<number>) {
@@ -371,19 +436,20 @@ function sourceAppendix(rawItems: IntelRawItem[], relevantIds: Set<number>) {
         <td>${relevantIds.has(item.id) ? "yes" : "no"}</td>
         <td>${escapeHtml(item.source)}</td>
         <td>${escapeHtml(item.sourceType)}</td>
-        <td>${escapeHtml(item.publishedAt.toISOString())}</td>
+        <td>${escapeHtml(sourceTimeLabel(item))}</td>
         <td>${link}</td>
       </tr>`;
     })
     .join("");
 
-  return `<section class="panel">
+  return `<details class="panel">
+    <summary>Source Appendix (${rawItems.length} items)</summary>
     <h2>Source Appendix</h2>
     <table>
-      <thead><tr><th>Relevant</th><th>Source</th><th>Type</th><th>Published</th><th>Item</th></tr></thead>
+      <thead><tr><th>Relevant</th><th>Source</th><th>Type</th><th>Time</th><th>Item</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
-  </section>`;
+  </details>`;
 }
 
 function buildHtml(args: {
@@ -418,7 +484,7 @@ function buildHtml(args: {
     a { color: #0b57d0; text-decoration: none; }
     a:hover { text-decoration: underline; }
     .meta { color: #667085; font-size: 13px; }
-    .panel, .theme { background: #fff; border: 1px solid #d9dee7; border-radius: 8px; padding: 16px 18px; margin: 12px 0; }
+    .panel, .theme, .packet { background: #fff; border: 1px solid #d9dee7; border-radius: 8px; padding: 16px 18px; margin: 12px 0; }
     .summary { line-height: 1.55; }
     .hero { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(280px, .8fr); gap: 14px; align-items: stretch; }
     .stat-grid, .metrics { display: grid; grid-template-columns: repeat(2, minmax(140px, 1fr)); gap: 8px; }
@@ -439,6 +505,7 @@ function buildHtml(args: {
     .status.ok { color: #137333; font-weight: 700; }
     .status.partial { color: #b06000; font-weight: 700; }
     .status.failed { color: #b42318; font-weight: 700; }
+    summary { cursor: pointer; font-weight: 800; }
     @media (max-width: 820px) {
       .hero, .columns { grid-template-columns: 1fr; }
       .stat-grid, .metrics { grid-template-columns: 1fr; }
@@ -464,7 +531,9 @@ function buildHtml(args: {
           <div class="stat"><span>Raw items</span><strong>${args.research.rawItemCount}</strong></div>
           <div class="stat"><span>Relevant items</span><strong>${args.research.relevantItemCount}</strong></div>
           <div class="stat"><span>Sources</span><strong>${args.research.sourceCount}</strong></div>
-          <div class="stat"><span>Themes</span><strong>${args.research.themes.length}</strong></div>
+          <div class="stat"><span>Evidence packets</span><strong>${args.research.evidencePackets.length}</strong></div>
+          <div class="stat"><span>Noise rejected</span><strong>${args.research.noiseRejectedCount}</strong></div>
+          <div class="stat"><span>Preset</span><strong>${escapeHtml(args.research.preset)}</strong></div>
         </div>
       </div>
     </section>
@@ -479,7 +548,18 @@ function buildHtml(args: {
       <h2>Data Quality</h2>
       <ul>${args.research.dataQuality.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul>
     </section>
-    ${args.research.themes.map((theme) => themeCard(theme, rawById, args.narrative)).join("")}
+    <section class="panel">
+      <h2>Evidence Packet Summary</h2>
+      <p>These are the compact packets the evaluator model should read first. Raw items that looked irrelevant, routine, or weak are excluded from packet synthesis.</p>
+    </section>
+    ${args.research.evidencePackets
+      .slice(0, 10)
+      .map((packet) => packetCard(packet, rawById))
+      .join("")}
+    <details class="panel">
+      <summary>Legacy Theme View (${args.research.themes.length} themes)</summary>
+      ${args.research.themes.map((theme) => themeCard(theme, rawById, args.narrative)).join("")}
+    </details>
     ${diagnosticsTable(args.research.diagnostics)}
     ${sourceAppendix(args.rawItems, relevantIds)}
   </main>

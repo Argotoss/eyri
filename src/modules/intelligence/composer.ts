@@ -10,7 +10,12 @@ import {
   runDeepIntelligenceReport,
   runIntelligenceReport,
 } from "./orchestrator.ts";
-import { INTEL_HORIZONS, type IntelHorizon } from "./types.ts";
+import {
+  DEEP_RESEARCH_PRESETS,
+  INTEL_HORIZONS,
+  type DeepResearchPreset,
+  type IntelHorizon,
+} from "./types.ts";
 import { intelReportFileName } from "./report.ts";
 
 export const intelligenceComposer = new Composer<CustomContext>();
@@ -43,9 +48,14 @@ function parseIntelCommand(input: string | undefined) {
   const horizonToken = tokens.find((token) =>
     INTEL_HORIZONS.includes(token.toLowerCase() as IntelHorizon),
   );
+  const presetToken = tokens.find((token) =>
+    DEEP_RESEARCH_PRESETS.includes(token.toLowerCase() as DeepResearchPreset),
+  );
   return {
     ticker: tokens[0].toUpperCase(),
     horizon: (horizonToken?.toLowerCase() as IntelHorizon | undefined) ?? "1d",
+    preset:
+      (presetToken?.toLowerCase() as DeepResearchPreset | undefined) ?? "deep",
     deep: true,
   };
 }
@@ -116,6 +126,7 @@ intelligenceComposer.command("intel", async (ctx) => {
           user: ctx.dbEntities.user,
           horizon: command.horizon,
           ticker: command.ticker,
+          preset: command.preset,
         })
       : await runIntelligenceReport({
           database: ctx.db,

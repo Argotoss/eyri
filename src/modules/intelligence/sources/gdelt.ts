@@ -1,4 +1,5 @@
 import type {
+  DeepResearchPreset,
   IntelHorizon,
   IntelRawItemInput,
   SourceDiagnostic,
@@ -51,6 +52,13 @@ function envNumber(name: string, fallback: number) {
   return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
+function presetLimit(
+  preset: DeepResearchPreset,
+  values: { fast: number; deep: number; exhaustive: number },
+) {
+  return values[preset];
+}
+
 function horizonToTimespan(horizon: IntelHorizon) {
   return horizon;
 }
@@ -74,7 +82,7 @@ function cacheTtlMs() {
 }
 
 function retryDelayMs(attempt: number) {
-  const baseDelay = envNumber("INTEL_GDELT_429_BACKOFF_MS", 30_000);
+  const baseDelay = envNumber("INTEL_GDELT_429_BACKOFF_MS", 90_000);
   return baseDelay * Math.max(1, attempt);
 }
 
@@ -190,11 +198,12 @@ async function fetchGdeltArticles(
       if (!response.ok) {
         const message = `HTTP ${response.status}: ${text.slice(0, 180)}`;
         console.error(`[intel:gdelt] ${label} failed: ${message}`);
-        if (response.status === 429 && attempt < maxRetries) {
-          const waitMs = retryDelayMs(attempt + 1);
-          gdeltDisabledUntil = Date.now() + waitMs;
-          await sleep(waitMs);
-          continue;
+        const retryAfterSeconds = Number(response.headers.get("retry-after"));
+        const disabledMs = Number.isFinite(retryAfterSeconds)
+          ? retryAfterSeconds * 1000
+          : retryDelayMs(attempt + 1);
+        if (response.status === 429) {
+          gdeltDisabledUntil = Date.now() + disabledMs;
         }
         const failed = {
           articles: [],
@@ -207,8 +216,9 @@ async function fetchGdeltArticles(
             metadata: { query, status: response.status, attempt },
           }),
         };
-        if (response.status === 429) {
-          gdeltDisabledUntil = Date.now() + retryDelayMs(maxRetries + 1);
+        if (response.status !== 429 && attempt < maxRetries) {
+          await sleep(Math.min(2000, retryDelayMs(attempt + 1)));
+          continue;
         }
         return failed;
       }
@@ -280,19 +290,23 @@ function rawItemsFromArticles(
   const fetchedAt = new Date();
   return articles
     .filter((article) => article.title && article.url)
-    .map((article) => ({
-      source: "gdelt",
-      sourceType: "news",
-      sourceId: sourceIdForArticle(article),
-      title: article.title ?? "Untitled article",
-      url: article.url,
-      publishedAt: parseGdeltDate(article.seendate),
-      fetchedAt,
-      body: [article.title, article.domain ? `Source: ${article.domain}` : ""]
-        .filter(Boolean)
-        .join("\n"),
-      rawPayload: { ...article, queryLabel },
-    }));
+    .map((article) => {
+      const discoveredAt = parseGdeltDate(article.seendate);
+      return {
+        source: "gdelt",
+        sourceType: "news",
+        sourceId: sourceIdForArticle(article),
+        title: article.title ?? "Untitled article",
+        url: article.url,
+        publishedAt: discoveredAt,
+        discoveredAt,
+        fetchedAt,
+        body: [article.title, article.domain ? `Source: ${article.domain}` : ""]
+          .filter(Boolean)
+          .join("\n"),
+        rawPayload: { ...article, queryLabel },
+      };
+    });
 }
 
 function directQueryForTicker(entry: UniverseEntry) {
@@ -302,12 +316,17 @@ function directQueryForTicker(entry: UniverseEntry) {
 
 function deepQueriesForTicker(entry: UniverseEntry) {
   const name = entry.name === entry.ticker ? "" : entry.name;
-  const quotedName = name ? `"${name}"` : "";
+  const quotedName = name
+    ? `"${name.replace(/\b(Inc|Corporation|Corp)\b\.?/gi, "").trim()}"`
+    : "";
   const aliases = entry.aliases
     .filter((alias) => alias !== entry.ticker && alias.length >= 4)
-    .slice(0, 3)
+    .filter((alias) => alias.toLowerCase() !== name.toLowerCase())
+    .slice(0, 1)
     .map((alias) => `"${alias}"`);
-  const identity = [quotedName, ...aliases, `$${entry.ticker}`, entry.ticker]
+  const identity = [
+    ...new Set([quotedName, ...aliases, `$${entry.ticker}`, entry.ticker]),
+  ]
     .filter(Boolean)
     .join(" OR ");
   const sourceLang = "sourcelang:english";
@@ -318,18 +337,14 @@ function deepQueriesForTicker(entry: UniverseEntry) {
       query: `(${identity}) ${sourceLang}`,
     },
     {
-      label: `ticker-deep:${entry.ticker}:catalysts`,
-      query: `(${identity}) (earnings OR guidance OR outlook OR upgrade OR downgrade OR "price target" OR analyst OR revenue OR margin OR demand OR supply OR contract OR lawsuit OR investigation OR acquisition) ${sourceLang}`,
-    },
-    {
       label: `ticker-deep:${entry.ticker}:market-reaction`,
-      query: `(${identity}) (shares OR stock OR premarket OR "after hours" OR volume OR rallies OR jumps OR falls OR slides OR volatility) ${sourceLang}`,
+      query: `(${identity}) (earnings OR guidance OR analyst OR demand OR supply OR shares OR stock OR volume) ${sourceLang}`,
     },
     {
       label: `ticker-deep:${entry.ticker}:industry`,
       query: entry.sector
-        ? `(${identity}) ("${entry.sector}" OR sector OR industry OR competitor OR demand OR pricing) ${sourceLang}`
-        : `(${identity}) (sector OR industry OR competitor OR demand OR pricing) ${sourceLang}`,
+        ? `(${identity}) ("${entry.sector}" OR industry OR competitor OR pricing) ${sourceLang}`
+        : `(${identity}) (industry OR competitor OR pricing) ${sourceLang}`,
     },
   ];
 }
@@ -337,12 +352,20 @@ function deepQueriesForTicker(entry: UniverseEntry) {
 export async function collectGdeltItemsForTicker(
   entry: UniverseEntry,
   horizon: IntelHorizon,
+  preset: DeepResearchPreset = "deep",
 ): Promise<SourceCollectionResult> {
-  const maxRecords = envNumber("INTEL_GDELT_DEEP_MAX_RECORDS", 100);
+  const maxRecords = envNumber(
+    "INTEL_GDELT_DEEP_MAX_RECORDS",
+    presetLimit(preset, { fast: 40, deep: 100, exhaustive: 200 }),
+  );
   const rawItems: IntelRawItemInput[] = [];
   const diagnostics: SourceDiagnostic[] = [];
 
-  for (const { label, query } of deepQueriesForTicker(entry)) {
+  const queries = deepQueriesForTicker(entry).slice(
+    0,
+    presetLimit(preset, { fast: 1, deep: 2, exhaustive: 3 }),
+  );
+  for (const { label, query } of queries) {
     const result = await fetchGdeltArticles(label, query, horizon, maxRecords);
     diagnostics.push(result.diagnostic);
     rawItems.push(...rawItemsFromArticles(result.articles, label));

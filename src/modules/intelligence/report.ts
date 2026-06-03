@@ -7,6 +7,7 @@ import type {
   StockIntel,
   UniverseEntry,
 } from "./types.ts";
+import { recordModelUsage } from "./model_usage.ts";
 
 type ReportNarrative = {
   executiveSummary?: unknown;
@@ -196,6 +197,7 @@ async function callReportModel(
   };
 
   try {
+    const model = modelName();
     const response = await fetch(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -207,7 +209,7 @@ async function callReportModel(
           "X-Title": "Eyri Market Intelligence",
         },
         body: JSON.stringify({
-          model: modelName(),
+          model,
           messages: [
             {
               role: "system",
@@ -221,6 +223,7 @@ async function callReportModel(
           ],
           temperature: 0.2,
           response_format: { type: "json_object" },
+          usage: { include: true },
         }),
       },
     );
@@ -230,6 +233,7 @@ async function callReportModel(
     }
 
     const data = await response.json();
+    recordModelUsage({ stage: "report", model, usage: data?.usage });
     const content = data?.choices?.[0]?.message?.content;
     return typeof content === "string" ? parseJsonObject(content) : null;
   } catch (error) {

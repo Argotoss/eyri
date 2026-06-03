@@ -106,10 +106,32 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
       ticker: "MU",
       companyName: "Micron Technology",
       horizon: "1d",
+      preset: "deep",
       rawItemCount: 1,
       relevantItemCount: 1,
       duplicateItemCount: 0,
+      noiseRejectedCount: 0,
       sourceCount: 1,
+      evidencePackets: [
+        {
+          id: "MU:supply_demand",
+          ticker: "MU",
+          topic: "supply_demand",
+          title: "Supply, Demand, Pricing, And Margins",
+          direction: "positive",
+          score: 78,
+          confidence: "low",
+          summary: "Memory pricing improved.",
+          conclusion:
+            "Supply, Demand, Pricing, And Margins is a strong evidence cluster worth evaluator attention.",
+          whyItMatters:
+            "Concrete catalyst or market signal with potential short-term relevance.",
+          keyFacts: ["Memory pricing rose 12%."],
+          evidenceItemIds: [1],
+          sourceCount: 1,
+          noiseRejectedCount: 0,
+        },
+      ],
       themes: [
         {
           key: "supply_demand",
