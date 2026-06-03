@@ -123,6 +123,8 @@ Deno.test("buildDeepResearchData aggregates stock evidence into themes", () => {
   });
 
   assert(research.evidencePackets.length > 0, "expected evidence packets");
+  assert(research.signalCounts.high > 0, "expected high-signal items");
+  assert(research.topSignals.length > 0, "expected top signal summaries");
   assert(research.themes.length === 2, "expected two themes");
   assert(
     research.themes.some((theme) => theme.key === "supply_demand"),

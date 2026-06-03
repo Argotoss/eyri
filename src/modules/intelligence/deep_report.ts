@@ -464,6 +464,8 @@ function telegramSummary(args: {
         `${index + 1}. ${packet.title}: ${packet.score}/100 ${packet.direction}`,
     )
     .join("\n");
+  const signals = args.research.signalCounts;
+  const signalLine = `Signals: ${signals.critical} critical / ${signals.high} high / ${signals.medium} medium / ${signals.low} low / ${signals.noise} noise`;
 
   return [
     `Deep Intel ${args.stock.ticker} - ${args.research.horizon}/${args.research.preset}`,
@@ -481,6 +483,7 @@ function telegramSummary(args: {
       .join("\n"),
     "",
     `${args.research.rawItemCount} raw / ${args.research.relevantItemCount} relevant / ${args.research.noiseRejectedCount} noise / ${args.research.sourceCount} sources`,
+    signalLine,
     changeLine,
     "Full decision dossier attached.",
   ].join("\n");
@@ -728,6 +731,39 @@ function sourceQualityPanel(
   </section>`;
 }
 
+function signalFilterPanel(research: DeepResearchData) {
+  const counts = research.signalCounts;
+  const rows = research.topSignals
+    .slice(0, 15)
+    .map(
+      (item) => `<tr>
+        <td><strong>${escapeHtml(item.signalTier)}</strong><span>${item.signalScore}/100</span></td>
+        <td>${escapeHtml(sourceDisplayName(item.source))}<br><span>${escapeHtml(item.source)}</span></td>
+        <td>${escapeHtml(item.topic.replaceAll("_", " "))}</td>
+        <td>${escapeHtml(item.title)}<br><span>${escapeHtml(item.summary)}</span></td>
+        <td>${escapeHtml(item.signalReasons.join("; "))}</td>
+      </tr>`,
+    )
+    .join("");
+
+  return `<section class="panel">
+    <h2>Signal Filter</h2>
+    <p class="meta">Raw items are ranked before packet synthesis so the evaluator can focus on the strongest evidence first.</p>
+    <div class="stat-grid">
+      <div class="stat"><span>Critical</span><strong>${counts.critical}</strong></div>
+      <div class="stat"><span>High</span><strong>${counts.high}</strong></div>
+      <div class="stat"><span>Medium</span><strong>${counts.medium}</strong></div>
+      <div class="stat"><span>Low</span><strong>${counts.low}</strong></div>
+      <div class="stat"><span>Noise</span><strong>${counts.noise}</strong></div>
+      <div class="stat"><span>Top signal items</span><strong>${research.topSignals.length}</strong></div>
+    </div>
+    <table>
+      <thead><tr><th>Tier</th><th>Source</th><th>Topic</th><th>Item</th><th>Why</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="5">No non-noise signal items were found.</td></tr>'}</tbody>
+    </table>
+  </section>`;
+}
+
 function compactItemRows(items: IntelRawItem[]) {
   return items
     .slice(0, 12)
@@ -927,6 +963,7 @@ function buildHtml(args: {
           <div class="stat"><span>Sources</span><strong>${args.research.sourceCount}</strong></div>
           <div class="stat"><span>Evidence packets</span><strong>${args.research.evidencePackets.length}</strong></div>
           <div class="stat"><span>Noise rejected</span><strong>${args.research.noiseRejectedCount}</strong></div>
+          <div class="stat"><span>Critical/high signals</span><strong>${args.research.signalCounts.critical + args.research.signalCounts.high}</strong></div>
           <div class="stat"><span>Preset</span><strong>${escapeHtml(args.research.preset)}</strong></div>
         </div>
       </div>
@@ -944,6 +981,7 @@ function buildHtml(args: {
       <h2>Data Quality</h2>
       <ul>${args.research.dataQuality.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul>
     </section>
+    ${signalFilterPanel(args.research)}
     ${sourceQualityPanel(args.rawItems, args.research.diagnostics)}
     <section class="panel">
       <h2>Evidence Packet Summary</h2>

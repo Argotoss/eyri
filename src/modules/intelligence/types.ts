@@ -161,6 +161,7 @@ export type FundamentalSnapshot = {
 };
 
 export type StockConfidence = "high" | "medium" | "low";
+export type SignalTier = "critical" | "high" | "medium" | "low" | "noise";
 
 export type StockIntel = {
   ticker: string;
@@ -193,6 +194,9 @@ export type ItemDistillation = {
   rawItemId: number;
   ticker: string;
   topic: string;
+  signalTier: SignalTier;
+  signalScore: number;
+  signalReasons: string[];
   relevance: number;
   novelty: number;
   sourceQuality: number;
@@ -204,6 +208,17 @@ export type ItemDistillation = {
   keyFacts: string[];
   noiseReason?: string;
   createdAt: Date;
+};
+
+export type SignalItemSummary = {
+  rawItemId: number;
+  title: string;
+  source: string;
+  topic: string;
+  signalTier: SignalTier;
+  signalScore: number;
+  signalReasons: string[];
+  summary: string;
 };
 
 export type EvidencePacket = {
@@ -261,6 +276,8 @@ export type DeepResearchData = {
   relevantItemCount: number;
   duplicateItemCount: number;
   noiseRejectedCount: number;
+  signalCounts: Record<SignalTier, number>;
+  topSignals: SignalItemSummary[];
   sourceCount: number;
   evidencePackets: EvidencePacket[];
   changeSummary?: RunItemDelta;

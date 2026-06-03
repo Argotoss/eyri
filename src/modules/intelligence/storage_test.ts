@@ -7,6 +7,7 @@ import {
   getLatestIntelDiagnostics,
   getLatestIntelReport,
   getRunItemDelta,
+  saveItemDistillations,
   saveModelUsages,
   saveRawItems,
   saveRunTimings,
@@ -106,6 +107,68 @@ Deno.test("intelligence storage exposes status, latest report, and diagnostics",
     assert(diagnostics?.steps[0].status === "failed", "failed sources first");
     assert(diagnostics?.timings[0].stage === "source-fetch", "slowest first");
     assert(diagnostics?.usages[0].totalTokens === 1200, "expected usage");
+  } finally {
+    database.close();
+  }
+});
+
+Deno.test("intelligence storage persists item signal tiers", async () => {
+  const database = new Database(":memory:");
+  try {
+    ensureIntelligenceSchema(database);
+    const now = new Date();
+    const runId = createSourceRun(database, "chat-1", "1d");
+    const [item] = await saveRawItems(
+      database,
+      [
+        {
+          source: "finnhub_news",
+          sourceType: "news",
+          sourceId: "signal-1",
+          title: "Micron demand improves",
+          publishedAt: now,
+          fetchedAt: now,
+        },
+      ],
+      runId,
+    );
+    saveItemDistillations(database, [
+      {
+        rawItemId: item.id,
+        ticker: "MU",
+        topic: "supply_demand",
+        signalTier: "high",
+        signalScore: 83,
+        signalReasons: ["high ticker relevance", "high-quality source"],
+        relevance: 95,
+        novelty: 90,
+        sourceQuality: 82,
+        catalystStrength: 65,
+        direction: "positive",
+        timeSensitivity: "1d",
+        summary: "Memory demand improved.",
+        whyItMatters: "Concrete catalyst.",
+        keyFacts: ["Pricing rose 12%."],
+        createdAt: now,
+      },
+    ]);
+
+    const row = database
+      .prepare(`
+        SELECT signal_tier, signal_score, signal_reasons
+        FROM intel_item_distillations
+        WHERE raw_item_id = ?
+      `)
+      .get(item.id) as
+      | { signal_tier: string; signal_score: number; signal_reasons: string }
+      | undefined;
+
+    assert(row?.signal_tier === "high", "expected signal tier");
+    assert(row?.signal_score === 83, "expected signal score");
+    assert(
+      row?.signal_reasons.includes("high-quality source"),
+      "expected signal reasons",
+    );
   } finally {
     database.close();
   }

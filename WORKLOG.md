@@ -235,3 +235,45 @@ Remaining after this milestone:
   transcripts, company IR releases, analyst estimate revisions, and options
   positioning for stronger evaluation.
 - Fetch-level cache shortcuts are still not implemented.
+
+### Signal-Tier Distillation Milestone
+
+Goal: make the raw-item filter more useful for the later evaluator by
+separating noise from the highest-signal evidence before report synthesis.
+
+Completed:
+
+- Added `critical`, `high`, `medium`, `low`, and `noise` signal tiers to item
+  distillation.
+- Added a normalized signal score and short signal reasons per raw item.
+- Persisted signal tier, score, and reasons in `intel_item_distillations`.
+- Added schema migration columns for existing SQLite databases.
+- Added aggregate signal counts and top signal item summaries to deep research
+  data.
+- Added a `Signal Filter` report section with counts and top signal rows.
+- Added Telegram summary signal counts.
+- Updated README with the new signal-tier behavior.
+- Added tests for distillation, storage persistence, deep research aggregation,
+  and report rendering.
+
+Verification:
+
+- `deno task format`
+- `deno task test` passed with 41 tests.
+- `deno check --allow-import src/main.ts`
+- Real isolated smoke run:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 173 raw items
+  - 140 relevant items
+  - 8 evidence packets
+  - signal counts: 5 critical, 17 high, 85 medium, 27 low, 39 noise
+  - top signal rows rendered in `Signal Filter`
+  - Telegram summary included `Signals:`
+  - GDELT returned HTTP 429; captured as nonfatal source failure
+
+Remaining after this milestone:
+
+- Tiering is deterministic and rule-based; the next layer should optionally use
+  the cheap model to classify edge relevance when source volume is high.
+- The evaluator still does not consume a separate compact evidence packet file.

@@ -4,6 +4,7 @@ import type {
   IntelHorizon,
   IntelRawItem,
   ItemDistillation,
+  SignalTier,
   TickerMention,
   UniverseEntry,
 } from "./types.ts";
@@ -253,6 +254,72 @@ function noiseReason(args: {
   return undefined;
 }
 
+function signalScore(args: {
+  relevance: number;
+  novelty: number;
+  sourceQuality: number;
+  catalystStrength: number;
+}) {
+  return Math.round(
+    args.relevance * 0.34 +
+      args.catalystStrength * 0.3 +
+      args.sourceQuality * 0.2 +
+      args.novelty * 0.16,
+  );
+}
+
+function signalTier(score: number, reason?: string): SignalTier {
+  if (reason) {
+    return "noise";
+  }
+  if (score >= 85) {
+    return "critical";
+  }
+  if (score >= 72) {
+    return "high";
+  }
+  if (score >= 55) {
+    return "medium";
+  }
+  return "low";
+}
+
+function signalReasons(args: {
+  topic: string;
+  relevance: number;
+  novelty: number;
+  sourceQuality: number;
+  catalystStrength: number;
+  direction: DirectionHint;
+  noiseReason?: string;
+}) {
+  if (args.noiseReason) {
+    return [`Rejected: ${args.noiseReason}`];
+  }
+  const reasons: string[] = [];
+  if (args.catalystStrength >= 75) {
+    reasons.push("strong catalyst language");
+  } else if (args.catalystStrength >= 55) {
+    reasons.push("moderate catalyst language");
+  }
+  if (args.relevance >= 85) {
+    reasons.push("high ticker relevance");
+  }
+  if (args.sourceQuality >= 82) {
+    reasons.push("high-quality source");
+  }
+  if (args.novelty >= 85) {
+    reasons.push("fresh item");
+  }
+  if (args.direction !== "unknown") {
+    reasons.push(`${args.direction} direction hint`);
+  }
+  if (args.topic !== "other") {
+    reasons.push(`topic: ${args.topic.replaceAll("_", " ")}`);
+  }
+  return reasons.slice(0, 5);
+}
+
 export function buildItemDistillations(args: {
   rawItems: IntelRawItem[];
   mentions: TickerMention[];
@@ -273,10 +340,33 @@ export function buildItemDistillations(args: {
     const direction = inferDirection(text);
     const summary = firstUsefulSentence(text);
     const facts = keyFacts(text);
+    const reason = noiseReason({
+      relevance,
+      sourceQuality: source,
+      catalystStrength: strength,
+      topic,
+    });
+    const score = signalScore({
+      relevance,
+      novelty,
+      sourceQuality: source,
+      catalystStrength: strength,
+    });
     const distillation = {
       rawItemId: item.id,
       ticker: args.entry.ticker,
       topic,
+      signalTier: signalTier(score, reason),
+      signalScore: score,
+      signalReasons: signalReasons({
+        topic,
+        relevance,
+        novelty,
+        sourceQuality: source,
+        catalystStrength: strength,
+        direction,
+        noiseReason: reason,
+      }),
       relevance,
       novelty,
       sourceQuality: source,
@@ -285,16 +375,11 @@ export function buildItemDistillations(args: {
       timeSensitivity: timeSensitivity(item, strength),
       summary,
       whyItMatters:
-        strength >= 65
+        score >= 72
           ? "Concrete catalyst or market signal with potential short-term relevance."
           : "Useful background only if it supports stronger evidence.",
       keyFacts: facts,
-      noiseReason: noiseReason({
-        relevance,
-        sourceQuality: source,
-        catalystStrength: strength,
-        topic,
-      }),
+      noiseReason: reason,
       createdAt: new Date(),
     } satisfies ItemDistillation;
     return distillation;

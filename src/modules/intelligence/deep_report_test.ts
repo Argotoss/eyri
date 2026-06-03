@@ -111,6 +111,25 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
       relevantItemCount: 1,
       duplicateItemCount: 0,
       noiseRejectedCount: 0,
+      signalCounts: {
+        critical: 0,
+        high: 1,
+        medium: 0,
+        low: 0,
+        noise: 0,
+      },
+      topSignals: [
+        {
+          rawItemId: 1,
+          title: "Micron demand improves",
+          source: "finnhub_news",
+          topic: "supply_demand",
+          signalTier: "high",
+          signalScore: 78,
+          signalReasons: ["strong catalyst language", "high-quality source"],
+          summary: "Memory pricing improved.",
+        },
+      ],
       sourceCount: 1,
       evidencePackets: [
         {
@@ -199,6 +218,10 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
       "expected change summary",
     );
     assert(
+      report.telegramSummary.includes("Signals:"),
+      "expected signal summary",
+    );
+    assert(
       report.html.includes("Decision Dossier"),
       "expected decision dossier",
     );
@@ -214,6 +237,7 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
     );
     assert(report.html.includes("New Items"), "expected new items section");
     assert(report.html.includes("Source Quality"), "expected source quality");
+    assert(report.html.includes("Signal Filter"), "expected signal filter");
     assert(
       report.html.includes("Finnhub News"),
       "expected source display name",

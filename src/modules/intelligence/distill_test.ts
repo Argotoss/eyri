@@ -65,6 +65,16 @@ Deno.test("distillation ranks relevant catalyst evidence and rejects noise", () 
     distillations.some((item) => item.rawItemId === 2 && item.noiseReason),
     "expected unrelated item to be rejected as noise",
   );
+  assert(
+    distillations.some(
+      (item) => item.rawItemId === 1 && item.signalTier === "high",
+    ),
+    "expected catalyst evidence to be high signal",
+  );
+  assert(
+    distillations.every((item) => item.signalReasons.length > 0),
+    "expected signal reasons",
+  );
   assert(packets.length === 1, "expected one signal packet");
   assert(packets[0].topic === "supply_demand", "expected supply/demand packet");
   assert(packets[0].evidenceItemIds.includes(1), "expected signal evidence");

@@ -97,6 +97,9 @@ calendar/social summaries, Yahoo/Google RSS, optional Reddit search, StockTwits
 messages, optional full text from linked articles, and the existing
 price/fundamental snapshots. The attached report is built from scored evidence
 packets, with raw source lists moved into expandable appendices.
+Each raw item is distilled into a signal tier (`critical`, `high`, `medium`,
+`low`, or `noise`) with a score and short reasons before evidence packets are
+built.
 
 Every intelligence run persists raw fetched items, item distillations, evidence
 packets, timing rows, model token/cost estimates, and the rendered report file.

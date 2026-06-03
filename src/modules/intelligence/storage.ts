@@ -445,6 +445,9 @@ export function ensureIntelligenceSchema(database: Database) {
       raw_item_id INTEGER NOT NULL,
       ticker TEXT NOT NULL,
       topic TEXT NOT NULL,
+      signal_tier TEXT NOT NULL DEFAULT 'low',
+      signal_score REAL NOT NULL DEFAULT 0,
+      signal_reasons TEXT NOT NULL DEFAULT '[]',
       relevance REAL NOT NULL,
       novelty REAL NOT NULL,
       source_quality REAL NOT NULL,
@@ -531,6 +534,24 @@ export function ensureIntelligenceSchema(database: Database) {
     "intel_market_snapshots",
     "company_name",
     "TEXT",
+  );
+  addColumnIfMissing(
+    database,
+    "intel_item_distillations",
+    "signal_tier",
+    "TEXT NOT NULL DEFAULT 'low'",
+  );
+  addColumnIfMissing(
+    database,
+    "intel_item_distillations",
+    "signal_score",
+    "REAL NOT NULL DEFAULT 0",
+  );
+  addColumnIfMissing(
+    database,
+    "intel_item_distillations",
+    "signal_reasons",
+    "TEXT NOT NULL DEFAULT '[]'",
   );
 }
 
@@ -1248,6 +1269,9 @@ export function saveItemDistillations(
       raw_item_id,
       ticker,
       topic,
+      signal_tier,
+      signal_score,
+      signal_reasons,
       relevance,
       novelty,
       source_quality,
@@ -1259,9 +1283,12 @@ export function saveItemDistillations(
       key_facts,
       noise_reason,
       created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(raw_item_id, ticker) DO UPDATE SET
       topic = excluded.topic,
+      signal_tier = excluded.signal_tier,
+      signal_score = excluded.signal_score,
+      signal_reasons = excluded.signal_reasons,
       relevance = excluded.relevance,
       novelty = excluded.novelty,
       source_quality = excluded.source_quality,
@@ -1280,6 +1307,9 @@ export function saveItemDistillations(
       item.rawItemId,
       normalizeTicker(item.ticker),
       item.topic,
+      item.signalTier,
+      item.signalScore,
+      stringifyPayload(item.signalReasons),
       item.relevance,
       item.novelty,
       item.sourceQuality,

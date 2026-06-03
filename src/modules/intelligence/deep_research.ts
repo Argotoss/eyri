@@ -11,6 +11,8 @@ import type {
   ItemDistillation,
   MarketSnapshot,
   RunItemDelta,
+  SignalItemSummary,
+  SignalTier,
   SourceDiagnostic,
   StockConfidence,
   UniverseEntry,
@@ -281,6 +283,52 @@ function dataQualityNotes(args: {
   return notes.length > 0 ? notes : ["No major data-quality warnings."];
 }
 
+function emptySignalCounts(): Record<SignalTier, number> {
+  return {
+    critical: 0,
+    high: 0,
+    medium: 0,
+    low: 0,
+    noise: 0,
+  };
+}
+
+function buildSignalCounts(distillations: ItemDistillation[]) {
+  const counts = emptySignalCounts();
+  for (const item of distillations) {
+    counts[item.signalTier] += 1;
+  }
+  return counts;
+}
+
+function buildTopSignals(
+  distillations: ItemDistillation[],
+  rawById: Map<number, IntelRawItem>,
+): SignalItemSummary[] {
+  return distillations
+    .filter((item) => item.signalTier !== "noise")
+    .sort((left, right) => {
+      if (left.signalScore !== right.signalScore) {
+        return right.signalScore - left.signalScore;
+      }
+      return right.catalystStrength - left.catalystStrength;
+    })
+    .slice(0, 20)
+    .map((item) => {
+      const raw = rawById.get(item.rawItemId);
+      return {
+        rawItemId: item.rawItemId,
+        title: raw?.title ?? item.summary,
+        source: raw?.source ?? "unknown",
+        topic: item.topic,
+        signalTier: item.signalTier,
+        signalScore: item.signalScore,
+        signalReasons: item.signalReasons,
+        summary: item.summary,
+      };
+    });
+}
+
 export function buildDeepResearchData(args: {
   entry: UniverseEntry;
   horizon: IntelHorizon;
@@ -335,6 +383,8 @@ export function buildDeepResearchData(args: {
     relevantItemCount: relevantSet.size,
     duplicateItemCount: args.duplicateItemCount,
     noiseRejectedCount,
+    signalCounts: buildSignalCounts(args.distillations),
+    topSignals: buildTopSignals(args.distillations, rawById),
     sourceCount: unique(args.rawItems.map((item) => item.source)).length,
     evidencePackets: args.evidencePackets,
     changeSummary: args.changeSummary,
