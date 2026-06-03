@@ -2,6 +2,12 @@ import { Composer, InputFile } from "grammy";
 import type { CustomContext } from "../bot/types.ts";
 import {
   addWatchlistTicker,
+  getIntelStatus,
+  getLatestIntelDiagnostics,
+  getLatestIntelReport,
+  type IntelDiagnosticsOverview,
+  type IntelRunOverview,
+  type IntelSourceStepOverview,
   listWatchlistTickers,
   removeWatchlistTicker,
   setSp500Enabled,
@@ -60,6 +66,19 @@ function parseIntelCommand(input: string | undefined) {
   };
 }
 
+function parseIntelUtilityCommand(input: string | undefined) {
+  const tokens = (input ?? "").trim().split(/\s+/).filter(Boolean);
+  const action = tokens[0]?.toLowerCase();
+  if (!["status", "last", "sources"].includes(action)) {
+    return null;
+  }
+
+  return {
+    action: action as "status" | "last" | "sources",
+    ticker: tokens[1]?.toUpperCase(),
+  };
+}
+
 function isValidTicker(value: string) {
   return /^[A-Z0-9.:-]{1,24}$/.test(value);
 }
@@ -92,9 +111,240 @@ async function replyWithReportDocument(
   }
 }
 
+async function fileExists(path: string) {
+  try {
+    const stat = await Deno.stat(path);
+    return stat.isFile;
+  } catch {
+    return false;
+  }
+}
+
+function compactDate(date: Date) {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function durationLabel(ms: number | undefined) {
+  if (ms === undefined || !Number.isFinite(ms)) {
+    return "n/a";
+  }
+  if (ms < 1000) {
+    return `${Math.round(ms)}ms`;
+  }
+  if (ms < 60_000) {
+    return `${(ms / 1000).toFixed(1)}s`;
+  }
+  return `${(ms / 60_000).toFixed(1)}m`;
+}
+
+function runDuration(run: IntelRunOverview) {
+  const end = run.completedAt ?? new Date();
+  return Math.max(0, end.getTime() - run.startedAt.getTime());
+}
+
+function detailNumber(run: IntelRunOverview, key: string) {
+  const value = run.details[key];
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function detailText(run: IntelRunOverview, key: string) {
+  const value = run.details[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function formatRunLine(run: IntelRunOverview) {
+  const ticker = detailText(run, "ticker");
+  const preset = detailText(run, "preset");
+  const raw = detailNumber(run, "rawItemCount");
+  const relevant = detailNumber(run, "relevantItemCount");
+  const events = detailNumber(run, "eventCount");
+  const themes = detailNumber(run, "themeCount");
+  const reportId = detailNumber(run, "reportId");
+  const pieces = [
+    `#${run.id}`,
+    run.status,
+    ticker,
+    `${run.horizon}${preset ? `/${preset}` : ""}`,
+    raw !== undefined
+      ? relevant !== undefined
+        ? `${raw} raw/${relevant} rel`
+        : `${raw} raw`
+      : undefined,
+    events !== undefined ? `${events} events` : undefined,
+    themes !== undefined ? `${themes} themes` : undefined,
+    reportId !== undefined ? `report ${reportId}` : undefined,
+    durationLabel(runDuration(run)),
+  ].filter(Boolean);
+  return pieces.join(" · ");
+}
+
+function formatCost(value: number | undefined) {
+  if (value === undefined || !Number.isFinite(value)) {
+    return "$0.0000";
+  }
+  return `$${value.toFixed(value < 0.01 ? 4 : 2)}`;
+}
+
+function formatSourceStep(step: IntelSourceStepOverview) {
+  const duration = step.completedAt.getTime() - step.startedAt.getTime();
+  const suffix = step.message ? ` - ${step.message}` : "";
+  return `${step.status.toUpperCase()} ${step.source}/${step.label}: ${step.itemCount} items, ${durationLabel(duration)}${suffix}`;
+}
+
+function formatDiagnosticsSummary(diagnostics: IntelDiagnosticsOverview) {
+  const failed = diagnostics.steps.filter((step) => step.status === "failed");
+  const partial = diagnostics.steps.filter((step) => step.status === "partial");
+  const ok = diagnostics.steps.filter((step) => step.status === "ok");
+  const cost = diagnostics.usages.reduce(
+    (sum, usage) => sum + (usage.costUsd ?? 0),
+    0,
+  );
+  const tokens = diagnostics.usages.reduce(
+    (sum, usage) => sum + (usage.totalTokens ?? 0),
+    0,
+  );
+  const timingLines = diagnostics.timings
+    .slice(0, 6)
+    .map((timing) => `${timing.stage} ${durationLabel(timing.durationMs)}`);
+  const usageLines = diagnostics.usages.map(
+    (usage) =>
+      `${usage.stage} ${usage.model}: ${usage.totalTokens ?? 0} tokens, ${formatCost(usage.costUsd)}`,
+  );
+  const sourceLines = [...failed, ...partial, ...ok]
+    .slice(0, 18)
+    .map(formatSourceStep);
+
+  return [
+    `Intel sources for run ${formatRunLine(diagnostics.run)}`,
+    `Sources: ${ok.length} ok, ${partial.length} partial, ${failed.length} failed`,
+    `Models: ${tokens} tokens, ${formatCost(cost)}`,
+    "",
+    "Source diagnostics:",
+    ...(sourceLines.length > 0
+      ? sourceLines
+      : ["No source diagnostics saved."]),
+    "",
+    "Slowest stages:",
+    ...(timingLines.length > 0 ? timingLines : ["No timing rows saved."]),
+    "",
+    "Model usage:",
+    ...(usageLines.length > 0 ? usageLines : ["No model usage rows saved."]),
+  ]
+    .join("\n")
+    .slice(0, 3900);
+}
+
+async function handleIntelUtilityCommand(
+  ctx: CustomContext,
+  command: NonNullable<ReturnType<typeof parseIntelUtilityCommand>>,
+) {
+  if (!ctx.chat) {
+    return true;
+  }
+
+  if (command.action === "status") {
+    const status = getIntelStatus(ctx.db, ctx.chat.id);
+    const latest = status.recentRuns[0];
+    const lines = [
+      "Intel status",
+      `Runs: ${status.runCount} · Reports: ${status.reportCount} · Raw cache: ${status.rawItemCount}`,
+      `Watchlist: ${status.watchlistCount} · S&P 500: ${status.sp500Enabled ? "on" : "off"}`,
+      status.latestReport
+        ? `Latest report: #${status.latestReport.id} ${status.latestReport.horizon} · ${compactDate(status.latestReport.createdAt)}`
+        : "Latest report: none",
+      latest ? `Last run: ${formatRunLine(latest)}` : "Last run: none",
+      "",
+      "Recent runs:",
+      ...(status.recentRuns.length > 0
+        ? status.recentRuns.map(formatRunLine)
+        : ["No intelligence runs yet."]),
+    ];
+    await ctx.reply(escapeHtml(lines.join("\n")), htmlReplyOptions);
+    return true;
+  }
+
+  if (command.action === "last") {
+    const report = getLatestIntelReport(ctx.db, ctx.chat.id);
+    if (!report) {
+      await ctx.reply("No saved intelligence report found.", htmlReplyOptions);
+      return true;
+    }
+
+    const lines = [
+      `Last intel report #${report.id}`,
+      `${report.horizon} · ${compactDate(report.createdAt)} · ${report.universeSummary}`,
+      report.filePath
+        ? `File: ${report.filePath}${report.fileBytes ? ` (${report.fileBytes} bytes)` : ""}`
+        : "File: not saved",
+      "",
+      report.summaryText,
+    ];
+    await ctx.reply(
+      escapeHtml(lines.join("\n").slice(0, 3900)),
+      htmlReplyOptions,
+    );
+
+    if (report.filePath && (await fileExists(report.filePath))) {
+      await ctx.replyWithDocument(new InputFile(report.filePath), {
+        caption: `Intel report #${report.id}`,
+      });
+    } else {
+      await replyWithReportDocument(
+        ctx,
+        `intel-report-${report.id}.html`,
+        report.html,
+      );
+    }
+    return true;
+  }
+
+  if (command.action === "sources") {
+    if (command.ticker && !isValidTicker(command.ticker)) {
+      await ctx.reply("Ticker format is invalid.", htmlReplyOptions);
+      return true;
+    }
+
+    const diagnostics = getLatestIntelDiagnostics(
+      ctx.db,
+      ctx.chat.id,
+      command.ticker,
+    );
+    if (!diagnostics) {
+      await ctx.reply(
+        command.ticker
+          ? `No saved intelligence run found for ${escapeHtml(command.ticker)}.`
+          : "No saved intelligence run found.",
+        htmlReplyOptions,
+      );
+      return true;
+    }
+
+    await ctx.reply(
+      escapeHtml(formatDiagnosticsSummary(diagnostics)),
+      htmlReplyOptions,
+    );
+    return true;
+  }
+
+  return false;
+}
+
 intelligenceComposer.command("intel", async (ctx) => {
   if (!ctx.chat || !ctx.dbEntities.user) {
     await ctx.text("start");
+    return;
+  }
+
+  const utilityCommand = parseIntelUtilityCommand(ctx.match);
+  if (utilityCommand) {
+    await handleIntelUtilityCommand(ctx, utilityCommand);
     return;
   }
 

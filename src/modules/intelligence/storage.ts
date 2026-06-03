@@ -39,8 +39,125 @@ type RawItemRow = {
   raw_hash: string;
 };
 
+type SourceRunRow = {
+  id: number;
+  chat_id: string;
+  horizon: IntelHorizon;
+  started_at: string;
+  completed_at: string | null;
+  status: "running" | "complete" | "failed";
+  details: string | null;
+};
+
+type SourceStepRow = {
+  id: number;
+  run_id: number;
+  source: string;
+  label: string;
+  status: "ok" | "partial" | "failed";
+  item_count: number;
+  message: string | null;
+  metadata: string | null;
+  started_at: string;
+  completed_at: string;
+};
+
+type RunTimingRow = {
+  stage: string;
+  duration_ms: number;
+  metadata: string | null;
+};
+
+type ModelUsageRow = {
+  stage: string;
+  model: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  cost_usd: number | null;
+  created_at: string;
+};
+
+type ReportRow = {
+  id: number;
+  chat_id: string;
+  horizon: IntelHorizon;
+  universe_summary: string;
+  summary_text: string;
+  html: string;
+  file_path: string | null;
+  file_bytes: number | null;
+  created_at: string;
+};
+
+type CountRow = {
+  count: number;
+};
+
 type TableColumn = {
   name: string;
+};
+
+export type IntelRunOverview = {
+  id: number;
+  chatId: string;
+  horizon: IntelHorizon;
+  startedAt: Date;
+  completedAt?: Date;
+  status: "running" | "complete" | "failed";
+  details: Record<string, unknown>;
+};
+
+export type IntelSourceStepOverview = {
+  id: number;
+  runId: number;
+  source: string;
+  label: string;
+  status: SourceDiagnostic["status"];
+  itemCount: number;
+  message?: string;
+  metadata: Record<string, unknown>;
+  startedAt: Date;
+  completedAt: Date;
+};
+
+export type StoredIntelReport = {
+  id: number;
+  chatId: string;
+  horizon: IntelHorizon;
+  universeSummary: string;
+  summaryText: string;
+  html: string;
+  filePath?: string;
+  fileBytes?: number;
+  createdAt: Date;
+};
+
+export type IntelUsageOverview = {
+  stage: string;
+  model: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+  createdAt: Date;
+};
+
+export type IntelDiagnosticsOverview = {
+  run: IntelRunOverview;
+  steps: IntelSourceStepOverview[];
+  timings: RunTiming[];
+  usages: IntelUsageOverview[];
+};
+
+export type IntelStatusOverview = {
+  runCount: number;
+  reportCount: number;
+  rawItemCount: number;
+  watchlistCount: number;
+  sp500Enabled: boolean;
+  latestReport?: StoredIntelReport;
+  recentRuns: IntelRunOverview[];
 };
 
 function toChatId(chatId: string | number) {
@@ -63,6 +180,23 @@ function stringifyPayload(payload: unknown) {
   }
 }
 
+function parsePayload(
+  value: string | null | undefined,
+): Record<string, unknown> {
+  if (!value) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 function stableRawIdentity(item: IntelRawItemInput) {
   return [
     item.source,
@@ -80,6 +214,47 @@ async function sha256(value: string) {
   return [...new Uint8Array(digest)]
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function rowToRunOverview(row: SourceRunRow): IntelRunOverview {
+  return {
+    id: row.id,
+    chatId: row.chat_id,
+    horizon: row.horizon,
+    startedAt: new Date(row.started_at),
+    completedAt: row.completed_at ? new Date(row.completed_at) : undefined,
+    status: row.status,
+    details: parsePayload(row.details),
+  };
+}
+
+function rowToSourceStep(row: SourceStepRow): IntelSourceStepOverview {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    source: row.source,
+    label: row.label,
+    status: row.status,
+    itemCount: row.item_count,
+    message: row.message ?? undefined,
+    metadata: parsePayload(row.metadata),
+    startedAt: new Date(row.started_at),
+    completedAt: new Date(row.completed_at),
+  };
+}
+
+function rowToReport(row: ReportRow): StoredIntelReport {
+  return {
+    id: row.id,
+    chatId: row.chat_id,
+    horizon: row.horizon,
+    universeSummary: row.universe_summary,
+    summaryText: row.summary_text,
+    html: row.html,
+    filePath: row.file_path ?? undefined,
+    fileBytes: row.file_bytes ?? undefined,
+    createdAt: new Date(row.created_at),
+  };
 }
 
 function rowToRawItem(row: RawItemRow): IntelRawItem {
@@ -441,6 +616,237 @@ export function listWatchlistTickers(
     ticker: row.ticker,
     createdAt: new Date(row.created_at),
   }));
+}
+
+function countRows(
+  database: Database,
+  query: string,
+  ...params: (string | number)[]
+) {
+  return Number((database.prepare(query).get(...params) as CountRow).count);
+}
+
+export function getLatestIntelReport(
+  database: Database,
+  chatId: string | number,
+): StoredIntelReport | null {
+  ensureIntelligenceSchema(database);
+  const row = database
+    .prepare(`
+      SELECT
+        id,
+        chat_id,
+        horizon,
+        universe_summary,
+        summary_text,
+        html,
+        file_path,
+        file_bytes,
+        created_at
+      FROM intel_reports
+      WHERE chat_id = ?
+      ORDER BY id DESC
+      LIMIT 1
+    `)
+    .get(toChatId(chatId)) as ReportRow | undefined;
+
+  return row ? rowToReport(row) : null;
+}
+
+export function getIntelStatus(
+  database: Database,
+  chatId: string | number,
+  recentLimit = 5,
+): IntelStatusOverview {
+  ensureIntelligenceSchema(database);
+  const normalizedChatId = toChatId(chatId);
+  const settings = database
+    .prepare(`
+      SELECT chat_id, sp500_enabled
+      FROM intel_universe_settings
+      WHERE chat_id = ?
+    `)
+    .get(normalizedChatId) as UniverseSettingsRow | undefined;
+  const recentRuns = (
+    database
+      .prepare(`
+        SELECT
+          id,
+          chat_id,
+          horizon,
+          started_at,
+          completed_at,
+          status,
+          details
+        FROM intel_source_runs
+        WHERE chat_id = ?
+        ORDER BY id DESC
+        LIMIT ?
+      `)
+      .all(normalizedChatId, recentLimit) as SourceRunRow[]
+  ).map(rowToRunOverview);
+
+  return {
+    runCount: countRows(
+      database,
+      "SELECT COUNT(*) AS count FROM intel_source_runs WHERE chat_id = ?",
+      normalizedChatId,
+    ),
+    reportCount: countRows(
+      database,
+      "SELECT COUNT(*) AS count FROM intel_reports WHERE chat_id = ?",
+      normalizedChatId,
+    ),
+    rawItemCount: countRows(
+      database,
+      "SELECT COUNT(*) AS count FROM intel_raw_items",
+    ),
+    watchlistCount: countRows(
+      database,
+      "SELECT COUNT(*) AS count FROM intel_watchlist WHERE chat_id = ?",
+      normalizedChatId,
+    ),
+    sp500Enabled: settings ? settings.sp500_enabled === 1 : true,
+    latestReport: getLatestIntelReport(database, normalizedChatId) ?? undefined,
+    recentRuns,
+  };
+}
+
+function latestRunForDiagnostics(
+  database: Database,
+  chatId: string | number,
+  ticker?: string,
+) {
+  const normalizedChatId = toChatId(chatId);
+  const normalizedTicker = ticker ? normalizeTicker(ticker) : undefined;
+  const baseSelect = `
+    SELECT
+      id,
+      chat_id,
+      horizon,
+      started_at,
+      completed_at,
+      status,
+      details
+    FROM intel_source_runs
+  `;
+  if (!normalizedTicker) {
+    return database
+      .prepare(`
+        ${baseSelect}
+        WHERE chat_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+      `)
+      .get(normalizedChatId) as SourceRunRow | undefined;
+  }
+
+  const tickerPattern = `%${normalizedTicker}%`;
+  const detailPattern = `%"ticker":"${normalizedTicker}"%`;
+  return database
+    .prepare(`
+      ${baseSelect}
+      WHERE chat_id = ?
+        AND (
+          details LIKE ?
+          OR id IN (
+            SELECT run_id
+            FROM intel_source_run_steps
+            WHERE label LIKE ?
+          )
+        )
+      ORDER BY id DESC
+      LIMIT 1
+    `)
+    .get(normalizedChatId, detailPattern, tickerPattern) as
+    | SourceRunRow
+    | undefined;
+}
+
+export function getLatestIntelDiagnostics(
+  database: Database,
+  chatId: string | number,
+  ticker?: string,
+): IntelDiagnosticsOverview | null {
+  ensureIntelligenceSchema(database);
+  const runRow = latestRunForDiagnostics(database, chatId, ticker);
+  if (!runRow) {
+    return null;
+  }
+
+  const steps = (
+    database
+      .prepare(`
+        SELECT
+          id,
+          run_id,
+          source,
+          label,
+          status,
+          item_count,
+          message,
+          metadata,
+          started_at,
+          completed_at
+        FROM intel_source_run_steps
+        WHERE run_id = ?
+        ORDER BY
+          CASE status
+            WHEN 'failed' THEN 0
+            WHEN 'partial' THEN 1
+            ELSE 2
+          END,
+          source,
+          label
+      `)
+      .all(runRow.id) as SourceStepRow[]
+  ).map(rowToSourceStep);
+  const timings = (
+    database
+      .prepare(`
+        SELECT stage, duration_ms, metadata
+        FROM intel_run_timings
+        WHERE run_id = ?
+        ORDER BY duration_ms DESC
+      `)
+      .all(runRow.id) as RunTimingRow[]
+  ).map((row) => ({
+    stage: row.stage,
+    durationMs: row.duration_ms,
+    metadata: parsePayload(row.metadata),
+  }));
+  const usages = (
+    database
+      .prepare(`
+        SELECT
+          stage,
+          model,
+          input_tokens,
+          output_tokens,
+          total_tokens,
+          cost_usd,
+          created_at
+        FROM intel_model_usages
+        WHERE run_id = ?
+        ORDER BY id
+      `)
+      .all(runRow.id) as ModelUsageRow[]
+  ).map((row) => ({
+    stage: row.stage,
+    model: row.model,
+    inputTokens: row.input_tokens ?? undefined,
+    outputTokens: row.output_tokens ?? undefined,
+    totalTokens: row.total_tokens ?? undefined,
+    costUsd: row.cost_usd ?? undefined,
+    createdAt: new Date(row.created_at),
+  }));
+
+  return {
+    run: rowToRunOverview(runRow),
+    steps,
+    timings,
+    usages,
+  };
 }
 
 export function createSourceRun(

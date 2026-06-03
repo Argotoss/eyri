@@ -55,7 +55,10 @@ docker compose up -d --build
 /label TICKER LABEL
 /link TICKER GOOGLE_FINANCE_TAG
 /intel [1d|3d|14d]
-/intel TICKER [1d|3d|14d] [deep]
+/intel TICKER [1d|3d|14d] [fast|deep|exhaustive]
+/intel status
+/intel last
+/intel sources [TICKER]
 /watch add TICKER
 /watch remove TICKER
 /watch list
@@ -98,6 +101,15 @@ source lists moved into expandable appendices.
 Every intelligence run persists raw fetched items, item distillations, evidence
 packets, timing rows, model token/cost estimates, and the rendered report file.
 Report artifacts default to `data/reports`.
+
+Operational commands:
+
+- `/intel status` shows recent run health, report counts, raw cache size, and
+  watchlist/universe settings.
+- `/intel last` reposts the latest saved summary and attaches the saved HTML
+  report.
+- `/intel sources TICKER` shows the latest saved source diagnostics, slowest
+  stages, and model token/cost rows for a ticker run.
 
 The first information-layer sources are SEC EDGAR, GDELT news discovery, and
 the existing price providers. Extraction uses `INTEL_EXTRACT_MODEL` through
