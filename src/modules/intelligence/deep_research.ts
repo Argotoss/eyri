@@ -10,6 +10,7 @@ import type {
   IntelRawItem,
   ItemDistillation,
   MarketSnapshot,
+  RunItemDelta,
   SourceDiagnostic,
   StockConfidence,
   UniverseEntry,
@@ -289,6 +290,7 @@ export function buildDeepResearchData(args: {
   duplicateItemCount: number;
   distillations: ItemDistillation[];
   evidencePackets: EvidencePacket[];
+  changeSummary?: RunItemDelta;
   events: IntelEventCluster[];
   diagnostics: SourceDiagnostic[];
   market?: MarketSnapshot;
@@ -335,6 +337,7 @@ export function buildDeepResearchData(args: {
     noiseRejectedCount,
     sourceCount: unique(args.rawItems.map((item) => item.source)).length,
     evidencePackets: args.evidencePackets,
+    changeSummary: args.changeSummary,
     themes,
     diagnostics: args.diagnostics,
     dataQuality: dataQualityNotes({

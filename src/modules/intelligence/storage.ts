@@ -8,6 +8,7 @@ import type {
   MarketSnapshot,
   ModelUsage,
   EvidencePacket,
+  RunItemDelta,
   RunTiming,
   SourceDiagnostic,
   TickerMention,
@@ -37,6 +38,12 @@ type RawItemRow = {
   body: string | null;
   raw_payload: string | null;
   raw_hash: string;
+};
+
+type RunRawItemRow = {
+  raw_item_id: number;
+  source: string;
+  was_new_to_cache: number;
 };
 
 type SourceRunRow = {
@@ -357,6 +364,19 @@ export function ensureIntelligenceSchema(database: Database) {
 
     CREATE INDEX IF NOT EXISTS intel_raw_items_published_at_idx
       ON intel_raw_items(published_at);
+
+    CREATE TABLE IF NOT EXISTS intel_run_raw_items (
+      run_id INTEGER NOT NULL,
+      raw_item_id INTEGER NOT NULL,
+      was_new_to_cache INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (run_id, raw_item_id),
+      FOREIGN KEY (run_id) REFERENCES intel_source_runs(id),
+      FOREIGN KEY (raw_item_id) REFERENCES intel_raw_items(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS intel_run_raw_items_raw_item_id_idx
+      ON intel_run_raw_items(raw_item_id);
 
     CREATE TABLE IF NOT EXISTS intel_ticker_mentions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -926,6 +946,7 @@ export function saveSourceDiagnostics(
 export async function saveRawItems(
   database: Database,
   items: IntelRawItemInput[],
+  runId?: number,
 ): Promise<IntelRawItem[]> {
   ensureIntelligenceSchema(database);
   const saved: IntelRawItem[] = [];
@@ -962,31 +983,183 @@ export async function saveRawItems(
     FROM intel_raw_items
     WHERE raw_hash = ?
   `);
+  const link = database.prepare(`
+    INSERT INTO intel_run_raw_items (
+      run_id,
+      raw_item_id,
+      was_new_to_cache
+    ) VALUES (?, ?, ?)
+    ON CONFLICT(run_id, raw_item_id) DO UPDATE SET
+      was_new_to_cache = MAX(
+        intel_run_raw_items.was_new_to_cache,
+        excluded.was_new_to_cache
+      )
+  `);
 
   for (const item of items) {
     const fetchedAt = item.fetchedAt ?? new Date();
     const hash = await sha256(stableRawIdentity(item));
-    insert.run(
-      item.source,
-      item.sourceType,
-      item.sourceId,
-      item.title.trim(),
-      item.url ?? null,
-      item.publishedAt.toISOString(),
-      item.discoveredAt?.toISOString() ?? null,
-      fetchedAt.toISOString(),
-      item.body ?? null,
-      stringifyPayload(item.rawPayload),
-      hash,
-    );
+    const existingRow = select.get(hash) as RawItemRow | undefined;
+    const wasNewToCache = !existingRow;
+    if (!existingRow) {
+      insert.run(
+        item.source,
+        item.sourceType,
+        item.sourceId,
+        item.title.trim(),
+        item.url ?? null,
+        item.publishedAt.toISOString(),
+        item.discoveredAt?.toISOString() ?? null,
+        fetchedAt.toISOString(),
+        item.body ?? null,
+        stringifyPayload(item.rawPayload),
+        hash,
+      );
+    }
 
     const row = select.get(hash) as RawItemRow | undefined;
     if (row) {
+      if (runId !== undefined) {
+        link.run(runId, row.id, wasNewToCache ? 1 : 0);
+      }
       saved.push(rowToRawItem(row));
     }
   }
 
   return saved;
+}
+
+function rawItemsForIds(database: Database, ids: number[]) {
+  if (ids.length === 0) {
+    return [];
+  }
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = database
+    .prepare(`
+      SELECT
+        id,
+        source,
+        source_type,
+        source_id,
+        title,
+        url,
+        published_at,
+        discovered_at,
+        fetched_at,
+        body,
+        raw_payload,
+        raw_hash
+      FROM intel_raw_items
+      WHERE id IN (${placeholders})
+    `)
+    .all(...ids) as RawItemRow[];
+  const byId = new Map(rows.map((row) => [row.id, rowToRawItem(row)]));
+  return ids
+    .map((id) => byId.get(id))
+    .filter((item): item is IntelRawItem => item !== undefined);
+}
+
+function runRawItemRows(database: Database, runId: number) {
+  return database
+    .prepare(`
+      SELECT
+        link.raw_item_id,
+        item.source,
+        link.was_new_to_cache
+      FROM intel_run_raw_items link
+      JOIN intel_raw_items item ON item.id = link.raw_item_id
+      WHERE link.run_id = ?
+    `)
+    .all(runId) as RunRawItemRow[];
+}
+
+function previousRunForDelta(
+  database: Database,
+  runId: number,
+  ticker?: string,
+) {
+  const current = database
+    .prepare(`
+      SELECT chat_id
+      FROM intel_source_runs
+      WHERE id = ?
+    `)
+    .get(runId) as { chat_id: string } | undefined;
+  if (!current) {
+    return undefined;
+  }
+
+  const normalizedTicker = ticker ? normalizeTicker(ticker) : undefined;
+  if (!normalizedTicker) {
+    return database
+      .prepare(`
+        SELECT id
+        FROM intel_source_runs
+        WHERE chat_id = ?
+          AND id < ?
+          AND status = 'complete'
+        ORDER BY id DESC
+        LIMIT 1
+      `)
+      .get(current.chat_id, runId) as { id: number } | undefined;
+  }
+
+  return database
+    .prepare(`
+      SELECT id
+      FROM intel_source_runs
+      WHERE chat_id = ?
+        AND id < ?
+        AND status = 'complete'
+        AND details LIKE ?
+      ORDER BY id DESC
+      LIMIT 1
+    `)
+    .get(current.chat_id, runId, `%"ticker":"${normalizedTicker}"%`) as
+    | { id: number }
+    | undefined;
+}
+
+export function getRunItemDelta(
+  database: Database,
+  runId: number,
+  ticker?: string,
+): RunItemDelta {
+  ensureIntelligenceSchema(database);
+  const currentRows = runRawItemRows(database, runId);
+  const previousRun = previousRunForDelta(database, runId, ticker);
+  const previousRows = previousRun
+    ? runRawItemRows(database, previousRun.id)
+    : [];
+  const currentIds = new Set(currentRows.map((row) => row.raw_item_id));
+  const previousIds = new Set(previousRows.map((row) => row.raw_item_id));
+  const newItemIds = currentRows
+    .map((row) => row.raw_item_id)
+    .filter((id) => !previousIds.has(id));
+  const droppedItemIds = previousRows
+    .map((row) => row.raw_item_id)
+    .filter((id) => !currentIds.has(id));
+  const currentSources = new Set(currentRows.map((row) => row.source));
+  const previousSources = new Set(previousRows.map((row) => row.source));
+
+  return {
+    previousRunId: previousRun?.id,
+    currentItemCount: currentRows.length,
+    previousItemCount: previousRows.length,
+    newItemCount: newItemIds.length,
+    reusedItemCount: currentRows.length - newItemIds.length,
+    cacheNewItemCount: currentRows.filter((row) => row.was_new_to_cache === 1)
+      .length,
+    droppedItemCount: droppedItemIds.length,
+    newItems: rawItemsForIds(database, newItemIds).slice(0, 30),
+    droppedItems: rawItemsForIds(database, droppedItemIds).slice(0, 30),
+    newSources: [...currentSources].filter(
+      (source) => !previousSources.has(source),
+    ),
+    droppedSources: [...previousSources].filter(
+      (source) => !currentSources.has(source),
+    ),
+  };
 }
 
 export function saveTickerMentions(

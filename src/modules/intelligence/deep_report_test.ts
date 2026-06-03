@@ -132,6 +132,26 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
           noiseRejectedCount: 0,
         },
       ],
+      changeSummary: {
+        previousRunId: 3,
+        currentItemCount: 1,
+        previousItemCount: 1,
+        newItemCount: 1,
+        reusedItemCount: 0,
+        cacheNewItemCount: 1,
+        droppedItemCount: 1,
+        newItems: [rawItems[0]],
+        droppedItems: [
+          {
+            ...rawItems[0],
+            id: 2,
+            title: "Older Micron headline",
+            rawHash: "2",
+          },
+        ],
+        newSources: ["finnhub_news"],
+        droppedSources: ["google_news"],
+      },
       themes: [
         {
           key: "supply_demand",
@@ -175,6 +195,10 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
       "expected invalidation summary",
     );
     assert(
+      report.telegramSummary.includes("Changes: 1 new"),
+      "expected change summary",
+    );
+    assert(
       report.html.includes("Decision Dossier"),
       "expected decision dossier",
     );
@@ -184,6 +208,11 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
       "expected invalidation section",
     );
     assert(report.html.includes("Missing Data"), "expected missing data");
+    assert(
+      report.html.includes("Changed Since Previous Report"),
+      "expected change section",
+    );
+    assert(report.html.includes("New Items"), "expected new items section");
     assert(report.html.includes("Source Quality"), "expected source quality");
     assert(
       report.html.includes("Finnhub News"),

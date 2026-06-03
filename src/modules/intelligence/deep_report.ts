@@ -451,6 +451,12 @@ function telegramSummary(args: {
   executiveSummary: string;
   dossier: DecisionDossier;
 }) {
+  const change = args.research.changeSummary;
+  const changeLine = change
+    ? change.previousRunId
+      ? `Changes: ${change.newItemCount} new / ${change.reusedItemCount} reused / ${change.droppedItemCount} dropped since run #${change.previousRunId}`
+      : `Changes: baseline run, ${change.currentItemCount} current items (${change.cacheNewItemCount} new to cache)`
+    : "Changes: not available";
   const topPackets = args.research.evidencePackets
     .slice(0, 3)
     .map(
@@ -475,6 +481,7 @@ function telegramSummary(args: {
       .join("\n"),
     "",
     `${args.research.rawItemCount} raw / ${args.research.relevantItemCount} relevant / ${args.research.noiseRejectedCount} noise / ${args.research.sourceCount} sources`,
+    changeLine,
     "Full decision dossier attached.",
   ].join("\n");
 }
@@ -721,6 +728,62 @@ function sourceQualityPanel(
   </section>`;
 }
 
+function compactItemRows(items: IntelRawItem[]) {
+  return items
+    .slice(0, 12)
+    .map((item) => {
+      const link = item.url
+        ? `<a href="${escapeHtmlAttribute(item.url)}">${escapeHtml(item.title)}</a>`
+        : escapeHtml(item.title);
+      return `<li>${link}<span>${escapeHtml(sourceDisplayName(item.source))} - ${escapeHtml(sourceTimeLabel(item))}</span></li>`;
+    })
+    .join("");
+}
+
+function changedSincePreviousSection(research: DeepResearchData) {
+  const change = research.changeSummary;
+  if (!change) {
+    return `<section class="panel">
+      <h2>Changed Since Previous Report</h2>
+      <p>No run-delta metadata was available for this report.</p>
+    </section>`;
+  }
+
+  const newSources = change.newSources.length
+    ? change.newSources.map(sourceDisplayName).join(", ")
+    : "none";
+  const droppedSources = change.droppedSources.length
+    ? change.droppedSources.map(sourceDisplayName).join(", ")
+    : "none";
+  const headline = change.previousRunId
+    ? `${change.newItemCount} new, ${change.reusedItemCount} reused, ${change.droppedItemCount} dropped since run #${change.previousRunId}.`
+    : `Baseline run: ${change.currentItemCount} current items, ${change.cacheNewItemCount} new to cache.`;
+
+  return `<section class="panel">
+    <h2>Changed Since Previous Report</h2>
+    <p>${escapeHtml(headline)}</p>
+    <div class="stat-grid">
+      <div class="stat"><span>Current items</span><strong>${change.currentItemCount}</strong></div>
+      <div class="stat"><span>Previous items</span><strong>${change.previousItemCount}</strong></div>
+      <div class="stat"><span>New this run</span><strong>${change.newItemCount}</strong></div>
+      <div class="stat"><span>New to cache</span><strong>${change.cacheNewItemCount}</strong></div>
+      <div class="stat"><span>Reused</span><strong>${change.reusedItemCount}</strong></div>
+      <div class="stat"><span>Dropped</span><strong>${change.droppedItemCount}</strong></div>
+    </div>
+    <p class="meta">New sources: ${escapeHtml(newSources)}. Dropped sources: ${escapeHtml(droppedSources)}.</p>
+    <div class="columns">
+      <div>
+        <h3>New Items</h3>
+        <ol class="evidence">${compactItemRows(change.newItems) || "<li>No new items versus previous run.</li>"}</ol>
+      </div>
+      <div>
+        <h3>Dropped Items</h3>
+        <ol class="evidence">${compactItemRows(change.droppedItems) || "<li>No dropped items versus previous run.</li>"}</ol>
+      </div>
+    </div>
+  </section>`;
+}
+
 function diagnosticsTable(diagnostics: SourceDiagnostic[]) {
   const rows = diagnostics
     .map(
@@ -869,6 +932,7 @@ function buildHtml(args: {
       </div>
     </section>
     ${dossierSection(args.dossier, args.stock)}
+    ${changedSincePreviousSection(args.research)}
     <section class="panel">
       <h2>Market And Fundamentals</h2>
       <div class="columns">

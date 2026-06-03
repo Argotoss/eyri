@@ -223,6 +223,20 @@ export type EvidencePacket = {
   noiseRejectedCount: number;
 };
 
+export type RunItemDelta = {
+  previousRunId?: number;
+  currentItemCount: number;
+  previousItemCount: number;
+  newItemCount: number;
+  reusedItemCount: number;
+  cacheNewItemCount: number;
+  droppedItemCount: number;
+  newItems: IntelRawItem[];
+  droppedItems: IntelRawItem[];
+  newSources: string[];
+  droppedSources: string[];
+};
+
 export type DeepResearchTheme = {
   key: string;
   title: string;
@@ -249,6 +263,7 @@ export type DeepResearchData = {
   noiseRejectedCount: number;
   sourceCount: number;
   evidencePackets: EvidencePacket[];
+  changeSummary?: RunItemDelta;
   themes: DeepResearchTheme[];
   diagnostics: SourceDiagnostic[];
   dataQuality: string[];

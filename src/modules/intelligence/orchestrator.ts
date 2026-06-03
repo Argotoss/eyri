@@ -20,6 +20,7 @@ import { buildStockIntel } from "./stock.ts";
 import {
   createSourceRun,
   finishSourceRun,
+  getRunItemDelta,
   saveMarketSnapshots,
   saveEvidencePackets,
   saveItemDistillations,
@@ -174,6 +175,7 @@ export async function runIntelligenceReport({
       saveRawItems(
         database,
         uniqueRawItems([...secResult.items, ...gdeltResult.items]),
+        runId,
       ),
     );
     const mentions = await timed(timings, "resolve-mentions", async () =>
@@ -384,7 +386,12 @@ export async function runDeepIntelligenceReport({
     );
 
     const rawItems = await timed(timings, "save-raw-items", () =>
-      saveRawItems(database, fullTextResult.items),
+      saveRawItems(database, fullTextResult.items, runId),
+    );
+    const changeSummary = await timed(
+      timings,
+      "build-change-summary",
+      async () => getRunItemDelta(database, runId, entry.ticker),
     );
     const mentions = await timed(timings, "resolve-mentions", async () =>
       resolveMentionsForItems(rawItems, [entry]),
@@ -476,6 +483,7 @@ export async function runDeepIntelligenceReport({
       duplicateItemCount: deduped.duplicateCount,
       distillations,
       evidencePackets,
+      changeSummary,
       events: rankedEvents,
       diagnostics: allDiagnostics,
       market: reportSnapshots[0],
@@ -504,6 +512,11 @@ export async function runDeepIntelligenceReport({
       rawItemCount: rawItems.length,
       relevantItemCount: relevantItemIds.length,
       duplicateItemCount: deduped.duplicateCount,
+      cacheNewItemCount: changeSummary.cacheNewItemCount,
+      newSincePreviousCount: changeSummary.newItemCount,
+      reusedSincePreviousCount: changeSummary.reusedItemCount,
+      droppedSincePreviousCount: changeSummary.droppedItemCount,
+      previousRunId: changeSummary.previousRunId,
       noiseRejectedCount: research.noiseRejectedCount,
       mentionCount: mentions.length,
       eventCount: rankedEvents.length,

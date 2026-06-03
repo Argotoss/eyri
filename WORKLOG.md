@@ -151,3 +151,46 @@ Remaining after this milestone:
   analyst revisions, options, and short interest.
 - Source registry identifies missing coverage, but the pipeline does not yet
   fetch deltas or compare source coverage against previous runs.
+
+### Delta Reporting Milestone
+
+Goal: make repeat `/intel TICKER` runs show what changed since the previous
+report instead of only producing another standalone report.
+
+Completed:
+
+- Added `intel_run_raw_items` persistence for run-to-raw-item links.
+- Added per-run `was_new_to_cache` tracking.
+- Added `RunItemDelta` to deep research data.
+- Added delta calculation against the previous completed run for the same chat
+  and ticker.
+- Added changed-since-previous counts to run completion metadata:
+  - new since previous
+  - reused since previous
+  - dropped since previous
+  - new to cache
+  - previous run id
+- Added `Changed Since Previous Report` section to deep HTML reports.
+- Added change summary line to Telegram deep intel summaries.
+- Added storage tests for baseline and repeated-run deltas.
+- Extended deep report tests to require the changed-since-previous section.
+
+Verification:
+
+- `deno task format`
+- `deno task test` passed with 39 tests.
+- `deno check --allow-import src/main.ts`
+- Real isolated two-run smoke:
+  - ticker: `MU`
+  - preset: `1d/fast`
+  - first run: 205 current items, 205 new to cache, change section rendered
+  - second run: previous run #1 detected, 205 current items, 42 new, 163
+    reused, 42 dropped, change line and HTML section rendered
+
+Remaining after this milestone:
+
+- Delta is based on raw item identity, not semantic clustering yet.
+- It does not yet compare evidence-packet conclusions or stock-dossier verdict
+  drift.
+- Cache reuse is visible, but collectors still fetch externally every run; the
+  next layer should add fetch-level cache/delta shortcuts.
