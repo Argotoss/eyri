@@ -184,6 +184,11 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
       "expected invalidation section",
     );
     assert(report.html.includes("Missing Data"), "expected missing data");
+    assert(report.html.includes("Source Quality"), "expected source quality");
+    assert(
+      report.html.includes("Finnhub News"),
+      "expected source display name",
+    );
     assert(report.html.includes("Source Diagnostics"), "expected diagnostics");
     assert(report.html.includes("Source Appendix"), "expected source appendix");
     assert(

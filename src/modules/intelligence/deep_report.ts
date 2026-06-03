@@ -12,6 +12,11 @@ import type {
   UniverseEntry,
 } from "./types.ts";
 import { recordModelUsage } from "./model_usage.ts";
+import {
+  getSourceProfile,
+  sourceCoverageGaps,
+  sourceDisplayName,
+} from "./source_registry.ts";
 
 type DeepNarrative = {
   executiveSummary?: unknown;
@@ -365,7 +370,17 @@ function buildMissingData(
   const failedSources = research.diagnostics
     .filter((diagnostic) => diagnostic.status === "failed")
     .map((diagnostic) => diagnostic.source);
+  const completedDiagnosticSources = research.diagnostics
+    .filter(
+      (diagnostic) =>
+        diagnostic.status !== "failed" && diagnostic.itemCount > 0,
+    )
+    .map((diagnostic) => diagnostic.source);
   const sourceNames = new Set(rawItems.map((item) => item.source));
+  const coverageGaps = sourceCoverageGaps({
+    rawSources: [...sourceNames],
+    diagnosticSources: completedDiagnosticSources,
+  });
   return uniqueList(
     [
       !stock.market ? "Market snapshot is missing." : "",
@@ -373,9 +388,7 @@ function buildMissingData(
       failedSources.length > 0
         ? `Failed source steps: ${[...new Set(failedSources)].join(", ")}.`
         : "",
-      !sourceNames.has("sec")
-        ? "No primary SEC filing evidence was collected for this run."
-        : "",
+      ...coverageGaps,
       research.evidencePackets.every((packet) => packet.confidence !== "high")
         ? "No high-confidence evidence packet yet."
         : "",
@@ -634,6 +647,80 @@ function themeCard(
   </section>`;
 }
 
+function sourceQualityPanel(
+  rawItems: IntelRawItem[],
+  diagnostics: SourceDiagnostic[],
+) {
+  const rawCounts = new Map<string, number>();
+  for (const item of rawItems) {
+    rawCounts.set(item.source, (rawCounts.get(item.source) ?? 0) + 1);
+  }
+  const diagnosticCounts = new Map<string, number>();
+  const statuses = new Map<string, Set<SourceDiagnostic["status"]>>();
+  for (const diagnostic of diagnostics) {
+    diagnosticCounts.set(
+      diagnostic.source,
+      (diagnosticCounts.get(diagnostic.source) ?? 0) + diagnostic.itemCount,
+    );
+    const sourceStatuses = statuses.get(diagnostic.source) ?? new Set();
+    sourceStatuses.add(diagnostic.status);
+    statuses.set(diagnostic.source, sourceStatuses);
+  }
+  const sources = [
+    ...new Set([...rawCounts.keys(), ...diagnosticCounts.keys()]),
+  ]
+    .map((source) => {
+      const profile = getSourceProfile(source);
+      return {
+        source,
+        profile,
+        rawCount: rawCounts.get(source) ?? 0,
+        diagnosticCount: diagnosticCounts.get(source) ?? 0,
+        statuses: [...(statuses.get(source) ?? new Set())],
+      };
+    })
+    .sort((left, right) => {
+      if (left.profile.qualityScore !== right.profile.qualityScore) {
+        return right.profile.qualityScore - left.profile.qualityScore;
+      }
+      return (
+        right.rawCount +
+        right.diagnosticCount -
+        (left.rawCount + left.diagnosticCount)
+      );
+    });
+
+  const rows = sources
+    .map((source) => {
+      const statusLabel =
+        source.statuses.length > 0 ? source.statuses.join(", ") : "raw only";
+      const itemCount =
+        source.rawCount > 0
+          ? `${source.rawCount} raw`
+          : `${source.diagnosticCount} diag`;
+      return `<tr>
+        <td><strong>${escapeHtml(source.profile.displayName)}</strong><span>${escapeHtml(source.source)}</span></td>
+        <td>${escapeHtml(source.profile.category)}</td>
+        <td>${escapeHtml(source.profile.reliability)}</td>
+        <td>${source.profile.qualityScore}</td>
+        <td>${escapeHtml(itemCount)}</td>
+        <td>${escapeHtml(statusLabel)}</td>
+        <td>${escapeHtml(source.profile.rateLimit)}</td>
+        <td>${escapeHtml(source.profile.limitations)}</td>
+      </tr>`;
+    })
+    .join("");
+
+  return `<section class="panel">
+    <h2>Source Quality</h2>
+    <p class="meta">Source quality affects packet scoring. Primary and high-reliability sources should outweigh discovery feeds and social chatter.</p>
+    <table>
+      <thead><tr><th>Source</th><th>Category</th><th>Reliability</th><th>Quality</th><th>Items</th><th>Status</th><th>Rate Limit</th><th>Limitation</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="8">No source rows available.</td></tr>'}</tbody>
+    </table>
+  </section>`;
+}
+
 function diagnosticsTable(diagnostics: SourceDiagnostic[]) {
   const rows = diagnostics
     .map(
@@ -670,7 +757,7 @@ function sourceAppendix(rawItems: IntelRawItem[], relevantIds: Set<number>) {
         : escapeHtml(item.title);
       return `<tr>
         <td>${relevantIds.has(item.id) ? "yes" : "no"}</td>
-        <td>${escapeHtml(item.source)}</td>
+        <td>${escapeHtml(sourceDisplayName(item.source))}<br><span>${escapeHtml(item.source)}</span></td>
         <td>${escapeHtml(item.sourceType)}</td>
         <td>${escapeHtml(sourceTimeLabel(item))}</td>
         <td>${link}</td>
@@ -745,6 +832,7 @@ function buildHtml(args: {
     table { width: 100%; border-collapse: collapse; background: #fff; }
     th, td { border-bottom: 1px solid #eaecf0; padding: 8px 9px; text-align: left; vertical-align: top; font-size: 12px; }
     th { background: #f2f4f7; color: #344054; }
+    td span { color: #667085; font-size: 11px; }
     .status.ok { color: #137333; font-weight: 700; }
     .status.partial { color: #b06000; font-weight: 700; }
     .status.failed { color: #b42318; font-weight: 700; }
@@ -792,6 +880,7 @@ function buildHtml(args: {
       <h2>Data Quality</h2>
       <ul>${args.research.dataQuality.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul>
     </section>
+    ${sourceQualityPanel(args.rawItems, args.research.diagnostics)}
     <section class="panel">
       <h2>Evidence Packet Summary</h2>
       <p>These are the compact packets the evaluator model should read first. Raw items that looked irrelevant, routine, or weak are excluded from packet synthesis.</p>

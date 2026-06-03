@@ -16,6 +16,7 @@ import {
   runDeepIntelligenceReport,
   runIntelligenceReport,
 } from "./orchestrator.ts";
+import { getSourceProfile } from "./source_registry.ts";
 import {
   DEEP_RESEARCH_PRESETS,
   INTEL_HORIZONS,
@@ -182,7 +183,7 @@ function formatRunLine(run: IntelRunOverview) {
     reportId !== undefined ? `report ${reportId}` : undefined,
     durationLabel(runDuration(run)),
   ].filter(Boolean);
-  return pieces.join(" · ");
+  return pieces.join(" - ");
 }
 
 function formatCost(value: number | undefined) {
@@ -195,7 +196,8 @@ function formatCost(value: number | undefined) {
 function formatSourceStep(step: IntelSourceStepOverview) {
   const duration = step.completedAt.getTime() - step.startedAt.getTime();
   const suffix = step.message ? ` - ${step.message}` : "";
-  return `${step.status.toUpperCase()} ${step.source}/${step.label}: ${step.itemCount} items, ${durationLabel(duration)}${suffix}`;
+  const profile = getSourceProfile(step.source);
+  return `${step.status.toUpperCase()} ${profile.displayName} (${step.source}, q${profile.qualityScore}, ${profile.reliability}): ${step.itemCount} items, ${durationLabel(duration)}${suffix}`;
 }
 
 function formatDiagnosticsSummary(diagnostics: IntelDiagnosticsOverview) {
@@ -254,10 +256,10 @@ async function handleIntelUtilityCommand(
     const latest = status.recentRuns[0];
     const lines = [
       "Intel status",
-      `Runs: ${status.runCount} · Reports: ${status.reportCount} · Raw cache: ${status.rawItemCount}`,
-      `Watchlist: ${status.watchlistCount} · S&P 500: ${status.sp500Enabled ? "on" : "off"}`,
+      `Runs: ${status.runCount} - Reports: ${status.reportCount} - Raw cache: ${status.rawItemCount}`,
+      `Watchlist: ${status.watchlistCount} - S&P 500: ${status.sp500Enabled ? "on" : "off"}`,
       status.latestReport
-        ? `Latest report: #${status.latestReport.id} ${status.latestReport.horizon} · ${compactDate(status.latestReport.createdAt)}`
+        ? `Latest report: #${status.latestReport.id} ${status.latestReport.horizon} - ${compactDate(status.latestReport.createdAt)}`
         : "Latest report: none",
       latest ? `Last run: ${formatRunLine(latest)}` : "Last run: none",
       "",
@@ -279,7 +281,7 @@ async function handleIntelUtilityCommand(
 
     const lines = [
       `Last intel report #${report.id}`,
-      `${report.horizon} · ${compactDate(report.createdAt)} · ${report.universeSummary}`,
+      `${report.horizon} - ${compactDate(report.createdAt)} - ${report.universeSummary}`,
       report.filePath
         ? `File: ${report.filePath}${report.fileBytes ? ` (${report.fileBytes} bytes)` : ""}`
         : "File: not saved",

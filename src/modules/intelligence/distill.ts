@@ -7,6 +7,7 @@ import type {
   TickerMention,
   UniverseEntry,
 } from "./types.ts";
+import { sourceQualityScore } from "./source_registry.ts";
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -26,23 +27,6 @@ function normalizeText(value: string) {
 
 function itemText(item: IntelRawItem) {
   return `${item.title}\n${item.body ?? ""}`;
-}
-
-function sourceQuality(source: string) {
-  const quality: Record<string, number> = {
-    sec: 92,
-    alpaca_news: 84,
-    finnhub_news: 82,
-    finnhub_metrics: 86,
-    finnhub_recommendations: 82,
-    finnhub_social: 58,
-    yahoo_finance_rss: 76,
-    google_news: 70,
-    gdelt: 64,
-    stocktwits: 42,
-    reddit: 44,
-  };
-  return quality[source] ?? 55;
 }
 
 function ageHours(item: IntelRawItem) {
@@ -274,7 +258,7 @@ export function buildItemDistillations(args: {
     const text = itemText(item);
     const mention = mentionsByItemId.get(item.id);
     const topic = topicFor(text, item.sourceType);
-    const source = sourceQuality(item.source);
+    const source = sourceQualityScore(item.source);
     const relevance = relevanceScore(item, mention, args.entry);
     const novelty = noveltyScore(item, args.horizon);
     const strength = catalystStrength(text, item.sourceType);
