@@ -3,6 +3,7 @@ import {
   buildFinnhubEarningsCalendarItems,
   buildFinnhubPriceTargetItems,
   buildFinnhubUpgradeDowngradeItems,
+  buildYahooChartContextItems,
   companyReleaseSearchQuery,
 } from "./deep.ts";
 
@@ -128,6 +129,69 @@ Deno.test("Finnhub rating revisions become analyst action evidence", () => {
   assert(
     items[0].publishedAt.toISOString() === "2026-06-03T10:15:00.000Z",
     "expected grade time",
+  );
+});
+
+Deno.test("Yahoo chart rows become market context evidence", () => {
+  const fetchedAt = new Date("2026-06-04T12:00:00.000Z");
+  const marketTime = Date.parse("2026-06-04T12:00:00.000Z") / 1000;
+  const items = buildYahooChartContextItems({
+    ticker: "MU",
+    fetchedAt,
+    horizon: "1d",
+    response: {
+      chart: {
+        result: [
+          {
+            meta: {
+              symbol: "MU",
+              currency: "USD",
+              fullExchangeName: "NasdaqGS",
+              longName: "Micron Technology, Inc.",
+              regularMarketTime: marketTime,
+              regularMarketPrice: 996,
+              regularMarketDayLow: 971.68,
+              regularMarketDayHigh: 1036.37,
+              regularMarketVolume: 250,
+              fiftyTwoWeekLow: 103.38,
+              fiftyTwoWeekHigh: 1089.29,
+            },
+            timestamp: [
+              1780257600,
+              1780344000,
+              1780430400,
+              1780516800,
+              marketTime,
+            ],
+            indicators: {
+              quote: [
+                {
+                  close: [900, 925, 960, 980, 996],
+                  volume: [100, 100, 100, 100, 250],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  });
+
+  assert(items.length === 1, "expected one chart item");
+  assert(items[0].source === "yahoo_chart", "expected chart source");
+  assert(items[0].sourceType === "market", "expected market source type");
+  assert(items[0].body?.includes("1d return: +1.63%"), "expected 1d return");
+  assert(
+    items[0].body?.includes("Relative volume: 1.92"),
+    "expected volume ratio",
+  );
+  assert(
+    items[0].body?.includes("52w range position"),
+    "expected range position",
+  );
+  assert(
+    items[0].publishedAt.toISOString() === "2026-06-04T12:00:00.000Z",
+    "expected market timestamp",
   );
 });
 

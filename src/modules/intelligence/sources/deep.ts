@@ -9,6 +9,7 @@ import type {
 
 const ALPACA_DATA_BASE_URL = "https://data.alpaca.markets";
 const FINNHUB_BASE_URL = "https://finnhub.io/api/v1";
+const YAHOO_CHART_BASE_URL = "https://query1.finance.yahoo.com";
 const GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search";
 const YAHOO_FINANCE_RSS_URL =
   "https://feeds.finance.yahoo.com/rss/2.0/headline";
@@ -78,6 +79,40 @@ type FinnhubUpgradeDowngradeItem = {
   action?: string;
   gradeTime?: string;
   period?: string;
+};
+
+type YahooChartMeta = {
+  currency?: string;
+  symbol?: string;
+  exchangeName?: string;
+  fullExchangeName?: string;
+  regularMarketTime?: number;
+  regularMarketPrice?: number;
+  regularMarketDayHigh?: number;
+  regularMarketDayLow?: number;
+  regularMarketVolume?: number;
+  fiftyTwoWeekHigh?: number;
+  fiftyTwoWeekLow?: number;
+  longName?: string;
+  shortName?: string;
+};
+
+type YahooChartQuote = {
+  close?: Array<number | null>;
+  volume?: Array<number | null>;
+};
+
+type YahooChartResponse = {
+  chart?: {
+    result?: Array<{
+      meta?: YahooChartMeta;
+      timestamp?: number[];
+      indicators?: {
+        quote?: YahooChartQuote[];
+      };
+    }>;
+    error?: unknown;
+  };
 };
 
 type RedditChild = {
@@ -156,6 +191,10 @@ function dateRange(horizon: IntelHorizon) {
   return { from, to };
 }
 
+function yahooChartRange(horizon: IntelHorizon) {
+  return horizon === "14d" ? "6mo" : horizon === "3d" ? "3mo" : "1mo";
+}
+
 function earningsCalendarDateRange(horizon: IntelHorizon) {
   const from = new Date();
   const to = new Date();
@@ -186,6 +225,37 @@ function formatOptionalNumber(label: string, value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value)
     ? `${label}: ${value}`
     : "";
+}
+
+function formatPercent(value: number | undefined) {
+  if (!Number.isFinite(value)) {
+    return "";
+  }
+  const numeric = value as number;
+  const prefix = numeric >= 0 ? "+" : "";
+  return `${prefix}${numeric.toFixed(2)}%`;
+}
+
+function formatMoney(value: number | null | undefined, currency = "USD") {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${currency} ${value.toFixed(2)}`
+    : "";
+}
+
+function percentChange(
+  current: number | undefined,
+  previous: number | undefined,
+) {
+  if (
+    typeof current !== "number" ||
+    typeof previous !== "number" ||
+    !Number.isFinite(current) ||
+    !Number.isFinite(previous) ||
+    previous === 0
+  ) {
+    return undefined;
+  }
+  return ((current - previous) / previous) * 100;
 }
 
 function stripTags(value: string) {
@@ -762,6 +832,180 @@ async function collectFinnhubAnalystSignals(
   };
 }
 
+export function buildYahooChartContextItems(args: {
+  response: YahooChartResponse;
+  ticker: string;
+  fetchedAt: Date;
+  horizon: IntelHorizon;
+}): IntelRawItemInput[] {
+  const ticker = normalizeTicker(args.ticker);
+  const result = args.response.chart?.result?.[0];
+  const meta = result?.meta;
+  const quote = result?.indicators?.quote?.[0];
+  const closes = (quote?.close ?? []).filter(
+    (value): value is number =>
+      typeof value === "number" && Number.isFinite(value),
+  );
+  if (!meta || closes.length === 0) {
+    return [];
+  }
+
+  const currency = meta.currency ?? "USD";
+  const latestClose =
+    typeof meta.regularMarketPrice === "number"
+      ? meta.regularMarketPrice
+      : closes.at(-1);
+  const previousClose = closes.length > 1 ? closes.at(-2) : undefined;
+  const fiveDayBase = closes.length > 5 ? closes.at(-6) : closes[0];
+  const periodBase = closes[0];
+  const oneDayReturn = percentChange(latestClose, previousClose);
+  const fiveDayReturn = percentChange(latestClose, fiveDayBase);
+  const periodReturn = percentChange(latestClose, periodBase);
+  const volumes = (quote?.volume ?? []).filter(
+    (value): value is number =>
+      typeof value === "number" && Number.isFinite(value),
+  );
+  const recentVolumes = volumes.slice(-20);
+  const averageVolume =
+    recentVolumes.length > 0
+      ? recentVolumes.reduce((sum, value) => sum + value, 0) /
+        recentVolumes.length
+      : undefined;
+  const latestVolume =
+    typeof meta.regularMarketVolume === "number"
+      ? meta.regularMarketVolume
+      : volumes.at(-1);
+  const volumeRatio =
+    latestVolume && averageVolume ? latestVolume / averageVolume : undefined;
+  const rangeSpread =
+    typeof meta.fiftyTwoWeekHigh === "number" &&
+    typeof meta.fiftyTwoWeekLow === "number"
+      ? meta.fiftyTwoWeekHigh - meta.fiftyTwoWeekLow
+      : undefined;
+  const rangePosition =
+    rangeSpread && rangeSpread > 0 && typeof latestClose === "number"
+      ? ((latestClose - (meta.fiftyTwoWeekLow as number)) / rangeSpread) * 100
+      : undefined;
+  const publishedAt = parseDate(meta.regularMarketTime);
+  const symbol = normalizeTicker(meta.symbol ?? ticker);
+  if (symbol !== ticker) {
+    return [];
+  }
+
+  return [
+    {
+      source: "yahoo_chart",
+      sourceType: "market",
+      sourceId: `yahoo:chart:${ticker}:${args.horizon}:${publishedAt.toISOString().slice(0, 10)}`,
+      title: `${ticker} Yahoo chart technical context`,
+      url: `https://finance.yahoo.com/quote/${encodeURIComponent(ticker)}`,
+      publishedAt,
+      discoveredAt: args.fetchedAt,
+      fetchedAt: args.fetchedAt,
+      body: [
+        meta.longName || meta.shortName
+          ? `Company: ${meta.longName ?? meta.shortName}`
+          : "",
+        meta.fullExchangeName || meta.exchangeName
+          ? `Exchange: ${meta.fullExchangeName ?? meta.exchangeName}`
+          : "",
+        latestClose
+          ? `Latest price: ${formatMoney(latestClose, currency)}`
+          : "",
+        formatPercent(oneDayReturn)
+          ? `1d return: ${formatPercent(oneDayReturn)}`
+          : "",
+        formatPercent(fiveDayReturn)
+          ? `5d return: ${formatPercent(fiveDayReturn)}`
+          : "",
+        formatPercent(periodReturn)
+          ? `${yahooChartRange(args.horizon)} return: ${formatPercent(periodReturn)}`
+          : "",
+        meta.regularMarketDayLow || meta.regularMarketDayHigh
+          ? `Day range: ${formatMoney(meta.regularMarketDayLow, currency)} - ${formatMoney(meta.regularMarketDayHigh, currency)}`
+          : "",
+        meta.fiftyTwoWeekLow || meta.fiftyTwoWeekHigh
+          ? `52w range: ${formatMoney(meta.fiftyTwoWeekLow, currency)} - ${formatMoney(meta.fiftyTwoWeekHigh, currency)}`
+          : "",
+        typeof rangePosition === "number"
+          ? `52w range position: ${rangePosition.toFixed(1)}%`
+          : "",
+        latestVolume ? `Latest volume: ${Math.round(latestVolume)}` : "",
+        averageVolume
+          ? `20-session average volume: ${Math.round(averageVolume)}`
+          : "",
+        volumeRatio ? `Relative volume: ${volumeRatio.toFixed(2)}x` : "",
+        volumeRatio && volumeRatio >= 1.5
+          ? "Unusual volume is present and should be checked against catalysts."
+          : "",
+        "Technical context is not a catalyst by itself; use it to judge whether news is already being priced in.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      rawPayload: {
+        meta,
+        closeCount: closes.length,
+        latestClose,
+        oneDayReturn,
+        fiveDayReturn,
+        periodReturn,
+        averageVolume,
+        latestVolume,
+        volumeRatio,
+        rangePosition,
+      },
+      tickers: [ticker],
+    },
+  ];
+}
+
+async function collectYahooChartContext(
+  entry: UniverseEntry,
+  horizon: IntelHorizon,
+): Promise<SourceCollectionResult> {
+  const startedAt = new Date();
+  const ticker = normalizeTicker(entry.ticker);
+  const url = new URL(
+    `/v8/finance/chart/${encodeURIComponent(ticker)}`,
+    YAHOO_CHART_BASE_URL,
+  );
+  url.searchParams.set("interval", "1d");
+  url.searchParams.set("range", yahooChartRange(horizon));
+  const result = await fetchJson<YahooChartResponse>(url, {
+    "User-Agent": "Mozilla/5.0",
+  });
+  const fetchedAt = new Date();
+  const items = result.data
+    ? buildYahooChartContextItems({
+        response: result.data,
+        ticker,
+        fetchedAt,
+        horizon,
+      })
+    : [];
+
+  return {
+    items,
+    diagnostics: [
+      makeDiagnostic({
+        source: "yahoo_chart",
+        label: `ticker-chart:${ticker}`,
+        startedAt,
+        status: result.status === 200 ? "ok" : "failed",
+        itemCount: items.length,
+        message:
+          result.status === 200
+            ? undefined
+            : `HTTP ${result.status}: ${result.text.slice(0, 160)}`,
+        metadata: {
+          ticker,
+          range: yahooChartRange(horizon),
+        },
+      }),
+    ],
+  };
+}
+
 export function buildFinnhubEarningsCalendarItems(args: {
   response: FinnhubEarningsCalendarResponse;
   ticker: string;
@@ -1186,12 +1430,13 @@ export async function collectDeepSourceItems(
   horizon: IntelHorizon,
   preset: DeepResearchPreset = "deep",
 ): Promise<SourceCollectionResult> {
-  const [alpaca, finnhub, analyst, earnings, rss, releases, social] =
+  const [alpaca, finnhub, analyst, earnings, chart, rss, releases, social] =
     await Promise.all([
       collectAlpacaNews(entry, horizon, preset),
       collectFinnhub(entry, horizon, preset),
       collectFinnhubAnalystSignals(entry, horizon, preset),
       collectFinnhubEarningsCalendar(entry, horizon),
+      collectYahooChartContext(entry, horizon),
       collectRss(entry, horizon, preset),
       collectCompanyReleases(entry, horizon, preset),
       collectSocial(entry, horizon, preset),
@@ -1203,6 +1448,7 @@ export async function collectDeepSourceItems(
       ...finnhub.items,
       ...analyst.items,
       ...earnings.items,
+      ...chart.items,
       ...rss.items,
       ...releases.items,
       ...social.items,
@@ -1212,6 +1458,7 @@ export async function collectDeepSourceItems(
       ...finnhub.diagnostics,
       ...analyst.diagnostics,
       ...earnings.diagnostics,
+      ...chart.diagnostics,
       ...rss.diagnostics,
       ...releases.diagnostics,
       ...social.diagnostics,

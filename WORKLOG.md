@@ -445,3 +445,45 @@ Remaining after this milestone:
 
 - Full analyst notes and detailed research PDFs are still not collected.
 - Consensus EPS/revenue estimate revision history is still missing.
+
+### Yahoo Chart Context Milestone
+
+Goal: add an accessible technical market-context source after Yahoo
+quoteSummary/options and Finnhub analyst endpoints proved gated under current
+credentials.
+
+Completed:
+
+- Added `yahoo_chart` deep source collection from Yahoo's chart endpoint.
+- Converts daily chart metadata into a compact market raw item with latest
+  price, 1d return, 5d return, range return, day range, 52-week range position,
+  latest volume, 20-session average volume, and relative volume.
+- Registered `yahoo_chart` as a high-quality `market_data` source.
+- Added parser tests for chart-to-market-context conversion.
+- Added source registry tests for the new source metadata.
+- Updated README source documentation.
+
+Verification:
+
+- `deno task format`
+- `deno task test` passed with 48 tests.
+- `deno check --allow-import src/main.ts`
+- Real isolated smoke run with OpenRouter signal review disabled:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 206 raw items
+  - 166 relevant items
+  - `yahoo_chart` diagnostic present and `ok` with 1 item
+  - HTML report written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-04T22-21-57.html`
+  - evaluator sidecar written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-04T22-21-57.evaluator.json`
+  - Finnhub price target and rating-revision endpoints still returned HTTP
+    403 with the current key.
+  - GDELT returned HTTP 429; captured as nonfatal source failure.
+
+Remaining after this milestone:
+
+- Yahoo quoteSummary analyst/fundamental modules still require crumb access in
+  this environment.
+- Options-chain context is still missing.

@@ -190,6 +190,21 @@ const SOURCE_REGISTRY: Record<string, SourceProfile> = {
     coverage: "finance headlines and syndicated articles",
     limitations: "can contain syndicated duplicates",
   },
+  yahoo_chart: {
+    key: "yahoo_chart",
+    displayName: "Yahoo Chart Context",
+    category: "market_data",
+    reliability: "high",
+    qualityScore: 82,
+    evidenceWeight: 0.8,
+    cost: "free",
+    rateLimit: "unofficial Yahoo endpoint behavior",
+    freshness: "near real time or exchange delayed",
+    coverage:
+      "daily OHLC context, recent returns, volume, exchange metadata, and 52-week range position",
+    limitations:
+      "technical context only; it explains market reaction but not the underlying catalyst",
+  },
   google_news: {
     key: "google_news",
     displayName: "Google News RSS",

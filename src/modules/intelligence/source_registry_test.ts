@@ -31,6 +31,10 @@ Deno.test("source registry exposes quality and metadata", () => {
     "expected analyst revision quality",
   );
   assert(
+    sourceQualityScore("yahoo_chart") >= 80,
+    "expected chart context quality",
+  );
+  assert(
     getSourceProfile("finnhub_price_target").category === "analyst_research",
     "expected analyst category",
   );
