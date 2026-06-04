@@ -22,6 +22,10 @@ Deno.test("source registry exposes quality and metadata", () => {
     sourceQualityScore("finnhub_earnings_calendar") >= 80,
     "expected earnings calendar quality",
   );
+  assert(
+    sourceQualityScore("company_releases") >= 75,
+    "expected company release discovery quality",
+  );
   assert(unknown.category === "unknown", "unknown sources get fallback");
 });
 

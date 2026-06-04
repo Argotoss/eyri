@@ -363,3 +363,44 @@ Remaining after this milestone:
 
 - The JSON packet is persisted but not sent as a Telegram attachment by default.
 - The evaluator itself is still not implemented.
+
+### Company Release Discovery Milestone
+
+Goal: add a higher-signal announcement source without adding a new provider by
+using release-focused RSS discovery queries.
+
+Completed:
+
+- Added `company_releases` source registry metadata.
+- Added a `company_release` source category and coverage gap.
+- Added release-focused Google News RSS discovery for deep ticker runs.
+- Added query terms for press releases, investor relations, company news,
+  announcements, launches, guidance, and earnings releases.
+- Stored discovered rows as `sourceType: company` so the signal layer can score
+  them as more catalyst-oriented than generic news.
+- Added source diagnostics under `ticker-company-releases:TICKER`.
+- Added `INTEL_COMPANY_RELEASE_RSS_LIMIT`.
+- Added tests for query construction, RSS item conversion, and source quality.
+- Updated README source/control documentation.
+
+Verification:
+
+- `deno task format`
+- `deno task test` passed with 45 tests.
+- `deno check --allow-import src/main.ts`
+- Real isolated smoke run with OpenRouter cleared and
+  `INTEL_SIGNAL_REVIEW_ENABLED=false`:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 199 raw items
+  - 160 relevant items
+  - 8 evidence packets
+  - `company_releases` diagnostic present and `ok`
+  - release-focused RSS returned 100 rows and kept 25 fast-preset raw items
+  - evaluator sidecar was written
+  - GDELT returned HTTP 429; captured as nonfatal source failure
+
+Remaining after this milestone:
+
+- This is still discovery through RSS, not a direct company IR feed.
+- Direct IR feeds, transcripts, and analyst estimate revisions are still missing.

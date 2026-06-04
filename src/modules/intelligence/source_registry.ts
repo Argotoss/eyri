@@ -5,6 +5,7 @@ export type SourceCategory =
   | "fundamentals"
   | "event_calendar"
   | "primary_filings"
+  | "company_release"
   | "news"
   | "news_discovery"
   | "social"
@@ -172,6 +173,21 @@ const SOURCE_REGISTRY: Record<string, SourceProfile> = {
     coverage: "broad web news discovery",
     limitations: "publisher quality varies and duplicates are common",
   },
+  company_releases: {
+    key: "company_releases",
+    displayName: "Company Release Discovery",
+    category: "company_release",
+    reliability: "medium",
+    qualityScore: 79,
+    evidenceWeight: 0.78,
+    cost: "free",
+    rateLimit: "Google News RSS behavior",
+    freshness: "news-discovery dependent",
+    coverage:
+      "release-focused company announcements, investor-relations syndications, and corporate news discovery",
+    limitations:
+      "not a direct IR feed; results can include syndications, rewrites, or unrelated announcement articles",
+  },
   gdelt: {
     key: "gdelt",
     displayName: "GDELT",
@@ -314,6 +330,9 @@ export function sourceCoverageGaps(args: {
   }
   if (!categories.has("event_calendar")) {
     gaps.push("No event-calendar source completed.");
+  }
+  if (!categories.has("company_release")) {
+    gaps.push("No company-release or IR-discovery source completed.");
   }
   if (!categories.has("news") && !categories.has("news_discovery")) {
     gaps.push("No news source completed.");

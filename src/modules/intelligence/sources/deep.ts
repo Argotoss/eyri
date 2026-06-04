@@ -259,7 +259,32 @@ function companyTerms(entry: UniverseEntry) {
   ].filter(Boolean);
 }
 
-function parseRssItems(xml: string) {
+export type RssItem = {
+  title: string;
+  link: string;
+  description: string;
+  pubDate: string;
+  source: string;
+};
+
+export function companyReleaseSearchQuery(
+  entry: UniverseEntry,
+  horizon: IntelHorizon,
+) {
+  const terms = companyTerms(entry);
+  const releaseTerms = [
+    '"press release"',
+    '"investor relations"',
+    '"company news"',
+    '"announces"',
+    '"launches"',
+    '"guidance"',
+    '"earnings release"',
+  ];
+  return `(${terms.join(" OR ")}) (${releaseTerms.join(" OR ")}) when:${horizonDays(horizon)}d`;
+}
+
+function parseRssItems(xml: string): RssItem[] {
   const items = xml.match(/<item[\s\S]*?<\/item>/gi) ?? [];
   return items.map((item) => {
     const readTag = (tag: string) =>
@@ -714,6 +739,84 @@ async function collectRss(
   return { items, diagnostics };
 }
 
+export function buildCompanyReleaseRssItems(args: {
+  rssItems: RssItem[];
+  ticker: string;
+  fetchedAt: Date;
+  limit: number;
+}): IntelRawItemInput[] {
+  const ticker = normalizeTicker(args.ticker);
+  return args.rssItems
+    .filter((item) => item.title)
+    .slice(0, args.limit)
+    .map(
+      (item): IntelRawItemInput => ({
+        source: "company_releases",
+        sourceType: "company",
+        sourceId: `company_releases:${item.link || item.title}`,
+        title: item.title,
+        url: item.link || undefined,
+        publishedAt: parseDate(item.pubDate),
+        discoveredAt: args.fetchedAt,
+        fetchedAt: args.fetchedAt,
+        body: [
+          item.description,
+          item.source ? `Source: ${item.source}` : "",
+          "Release-focused discovery query; verify whether this is a direct company/IR source or a syndicated rewrite.",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        rawPayload: item,
+        tickers: [ticker],
+      }),
+    );
+}
+
+async function collectCompanyReleases(
+  entry: UniverseEntry,
+  horizon: IntelHorizon,
+  preset: DeepResearchPreset,
+): Promise<SourceCollectionResult> {
+  const startedAt = new Date();
+  const ticker = normalizeTicker(entry.ticker);
+  const limit = envNumber(
+    "INTEL_COMPANY_RELEASE_RSS_LIMIT",
+    presetLimit(preset, { fast: 25, deep: 60, exhaustive: 120 }),
+  );
+  const url = new URL(GOOGLE_NEWS_RSS_URL);
+  url.searchParams.set("q", companyReleaseSearchQuery(entry, horizon));
+  url.searchParams.set("hl", "en-US");
+  url.searchParams.set("gl", "US");
+  url.searchParams.set("ceid", "US:en");
+
+  const result = await fetchText(url, {
+    "User-Agent": "Eyri market intelligence",
+  });
+  const rssItems = result.text ? parseRssItems(result.text) : [];
+  const fetchedAt = new Date();
+  const items = buildCompanyReleaseRssItems({
+    rssItems,
+    ticker,
+    fetchedAt,
+    limit,
+  });
+
+  return {
+    items,
+    diagnostics: [
+      makeDiagnostic({
+        source: "company_releases",
+        label: `ticker-company-releases:${ticker}`,
+        startedAt,
+        status: result.text ? "ok" : "failed",
+        itemCount: rssItems.length,
+        message: result.text ? undefined : `HTTP ${result.status}`,
+        metadata: { ticker, limit },
+      }),
+    ],
+  };
+}
+
 async function collectSocial(
   entry: UniverseEntry,
   horizon: IntelHorizon,
@@ -867,11 +970,12 @@ export async function collectDeepSourceItems(
   horizon: IntelHorizon,
   preset: DeepResearchPreset = "deep",
 ): Promise<SourceCollectionResult> {
-  const [alpaca, finnhub, earnings, rss, social] = await Promise.all([
+  const [alpaca, finnhub, earnings, rss, releases, social] = await Promise.all([
     collectAlpacaNews(entry, horizon, preset),
     collectFinnhub(entry, horizon, preset),
     collectFinnhubEarningsCalendar(entry, horizon),
     collectRss(entry, horizon, preset),
+    collectCompanyReleases(entry, horizon, preset),
     collectSocial(entry, horizon, preset),
   ]);
 
@@ -881,6 +985,7 @@ export async function collectDeepSourceItems(
       ...finnhub.items,
       ...earnings.items,
       ...rss.items,
+      ...releases.items,
       ...social.items,
     ],
     diagnostics: [
@@ -888,6 +993,7 @@ export async function collectDeepSourceItems(
       ...finnhub.diagnostics,
       ...earnings.diagnostics,
       ...rss.diagnostics,
+      ...releases.diagnostics,
       ...social.diagnostics,
     ],
   };
