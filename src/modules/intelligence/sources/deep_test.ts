@@ -3,6 +3,8 @@ import {
   buildFinnhubEarningsCalendarItems,
   buildFinnhubPriceTargetItems,
   buildFinnhubUpgradeDowngradeItems,
+  buildNasdaqAnalystTargetItems,
+  buildNasdaqEarningsSurpriseItems,
   buildNasdaqOptionsItems,
   buildNasdaqShortInterestItems,
   buildYahooChartContextItems,
@@ -304,6 +306,126 @@ Deno.test("Nasdaq options rows become aggregate positioning evidence", () => {
   assert(
     items[0].body?.includes("Top put open interest: Jun 5 1000.00"),
     "expected top put open interest",
+  );
+});
+
+Deno.test("Nasdaq analyst targets become consensus research evidence", () => {
+  const fetchedAt = new Date("2026-06-04T12:00:00.000Z");
+  const items = buildNasdaqAnalystTargetItems({
+    ticker: "MU",
+    fetchedAt,
+    response: {
+      data: {
+        symbol: "mu",
+        consensusOverview: {
+          lowPriceTarget: 400,
+          highPriceTarget: 1750,
+          priceTarget: 860.2,
+          buy: 26,
+          hold: 3,
+          sell: 0,
+        },
+        historicalConsensus: [
+          {
+            z: {
+              buy: 24,
+              hold: 3,
+              sell: 0,
+              date: "05/01/2026",
+              consensus: "Buy",
+            },
+            y: 820,
+          },
+          {
+            z: {
+              buy: 26,
+              hold: 3,
+              sell: 0,
+              date: "06/01/2026",
+              consensus: "Buy",
+            },
+            y: 860.2,
+          },
+        ],
+      },
+    },
+  });
+
+  assert(items.length === 1, "expected one analyst target item");
+  assert(
+    items[0].source === "nasdaq_analyst_target",
+    "expected analyst target source",
+  );
+  assert(items[0].sourceType === "research", "expected research source type");
+  assert(
+    items[0].body?.includes("Consensus price target: 860.20"),
+    "expected price target",
+  );
+  assert(
+    items[0].body?.includes("26 buy / 3 hold / 0 sell"),
+    "expected ratings mix",
+  );
+  assert(
+    items[0].body?.includes(
+      "Historical target change vs previous point: +4.90%",
+    ),
+    "expected target change",
+  );
+});
+
+Deno.test("Nasdaq earnings surprise rows become execution evidence", () => {
+  const fetchedAt = new Date("2026-06-04T12:00:00.000Z");
+  const items = buildNasdaqEarningsSurpriseItems({
+    ticker: "MU",
+    fetchedAt,
+    limit: 2,
+    response: {
+      data: {
+        symbol: "MU",
+        earningsSurpriseTable: {
+          rows: [
+            {
+              fiscalQtrEnd: "Feb 2026",
+              dateReported: "3/18/2026",
+              eps: 12.08,
+              consensusForecast: "8.64",
+              percentageSurprise: "39.81",
+            },
+            {
+              fiscalQtrEnd: "Nov 2025",
+              dateReported: "12/17/2025",
+              eps: 4.61,
+              consensusForecast: "3.67",
+              percentageSurprise: "25.61",
+            },
+            {
+              fiscalQtrEnd: "Aug 2025",
+              dateReported: "9/23/2025",
+              percentageSurprise: "-5.00",
+            },
+          ],
+        },
+      },
+    },
+  });
+
+  assert(items.length === 1, "expected one earnings surprise item");
+  assert(
+    items[0].source === "nasdaq_earnings_surprise",
+    "expected earnings surprise source",
+  );
+  assert(items[0].sourceType === "company", "expected company source type");
+  assert(
+    items[0].body?.includes("Latest EPS surprise: +39.81%"),
+    "expected latest surprise",
+  );
+  assert(
+    items[0].body?.includes("Average surprise across 2 rows: +32.71%"),
+    "expected average surprise",
+  );
+  assert(
+    items[0].publishedAt.toISOString().startsWith("2026-03-18"),
+    "expected reported date",
   );
 });
 

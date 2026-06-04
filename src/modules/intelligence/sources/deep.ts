@@ -156,6 +156,47 @@ type NasdaqOptionsResponse = {
   };
 };
 
+type NasdaqTargetPriceResponse = {
+  data?: {
+    symbol?: string;
+    consensusOverview?: {
+      lowPriceTarget?: number | string | null;
+      highPriceTarget?: number | string | null;
+      priceTarget?: number | string | null;
+      buy?: number | string | null;
+      hold?: number | string | null;
+      sell?: number | string | null;
+    };
+    historicalConsensus?: Array<{
+      z?: {
+        buy?: number | string | null;
+        hold?: number | string | null;
+        sell?: number | string | null;
+        date?: string;
+        consensus?: string;
+      };
+      y?: number | string | null;
+    }>;
+  };
+};
+
+type NasdaqEarningsSurpriseRow = {
+  fiscalQtrEnd?: string;
+  dateReported?: string;
+  eps?: number | string | null;
+  consensusForecast?: number | string | null;
+  percentageSurprise?: number | string | null;
+};
+
+type NasdaqEarningsSurpriseResponse = {
+  data?: {
+    symbol?: string;
+    earningsSurpriseTable?: {
+      rows?: NasdaqEarningsSurpriseRow[];
+    };
+  };
+};
+
 type RedditChild = {
   data?: {
     id?: string;
@@ -278,7 +319,7 @@ function parseNasdaqNumber(value: unknown) {
 }
 
 function parseNasdaqDate(value: string | undefined) {
-  const match = value?.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  const match = value?.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (!match) {
     return parseDate(value);
   }
@@ -1394,6 +1435,231 @@ async function collectNasdaqPositioning(
   };
 }
 
+export function buildNasdaqAnalystTargetItems(args: {
+  response: NasdaqTargetPriceResponse;
+  ticker: string;
+  fetchedAt: Date;
+}): IntelRawItemInput[] {
+  const ticker = normalizeTicker(args.ticker);
+  const responseTicker = normalizeTicker(args.response.data?.symbol ?? ticker);
+  const overview = args.response.data?.consensusOverview;
+  if (responseTicker !== ticker || !overview) {
+    return [];
+  }
+  const target = parseNasdaqNumber(overview.priceTarget);
+  const high = parseNasdaqNumber(overview.highPriceTarget);
+  const low = parseNasdaqNumber(overview.lowPriceTarget);
+  const buy = parseNasdaqNumber(overview.buy) ?? 0;
+  const hold = parseNasdaqNumber(overview.hold) ?? 0;
+  const sell = parseNasdaqNumber(overview.sell) ?? 0;
+  if (!target && !high && !low && buy + hold + sell === 0) {
+    return [];
+  }
+  const history = args.response.data?.historicalConsensus ?? [];
+  const latestHistory = history.at(-1);
+  const previousHistory = history.length > 1 ? history.at(-2) : undefined;
+  const latestConsensus = latestHistory?.z?.consensus;
+  const latestDate = latestHistory?.z?.date;
+  const latestHistoricalPriceTarget = parseNasdaqNumber(latestHistory?.y);
+  const previousHistoricalPriceTarget = parseNasdaqNumber(previousHistory?.y);
+  const targetChange = percentChange(
+    latestHistoricalPriceTarget,
+    previousHistoricalPriceTarget,
+  );
+  const publishedAt = latestDate ? parseNasdaqDate(latestDate) : args.fetchedAt;
+
+  return [
+    {
+      source: "nasdaq_analyst_target",
+      sourceType: "research",
+      sourceId: `nasdaq:analyst-target:${ticker}:${latestDate ?? nowIso().slice(0, 10)}`,
+      title: `${ticker} Nasdaq analyst target consensus`,
+      url: `https://www.nasdaq.com/market-activity/stocks/${ticker.toLowerCase()}/analyst-research`,
+      publishedAt,
+      discoveredAt: args.fetchedAt,
+      fetchedAt: args.fetchedAt,
+      body: [
+        target ? `Consensus price target: ${target.toFixed(2)}` : "",
+        low || high
+          ? `Target range: ${low?.toFixed(2) ?? "n/a"} - ${high?.toFixed(2) ?? "n/a"}`
+          : "",
+        `Ratings mix: ${buy.toFixed(0)} buy / ${hold.toFixed(0)} hold / ${sell.toFixed(0)} sell`,
+        latestConsensus
+          ? `Latest historical consensus: ${latestConsensus}`
+          : "",
+        latestDate ? `Latest consensus date: ${latestDate}` : "",
+        formatPercent(targetChange)
+          ? `Historical target change vs previous point: ${formatPercent(targetChange)}`
+          : "",
+        "Analyst target consensus can lag fresh research notes, but it helps quantify street bias and upside/downside expectations.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      rawPayload: {
+        overview,
+        latestHistory,
+        previousHistory,
+        latestHistoricalPriceTarget,
+        previousHistoricalPriceTarget,
+        targetChange,
+      },
+      tickers: [ticker],
+    },
+  ];
+}
+
+export function buildNasdaqEarningsSurpriseItems(args: {
+  response: NasdaqEarningsSurpriseResponse;
+  ticker: string;
+  fetchedAt: Date;
+  limit: number;
+}): IntelRawItemInput[] {
+  const ticker = normalizeTicker(args.ticker);
+  const responseTicker = normalizeTicker(args.response.data?.symbol ?? ticker);
+  if (responseTicker !== ticker) {
+    return [];
+  }
+  const rows = (args.response.data?.earningsSurpriseTable?.rows ?? [])
+    .filter((row) => row.dateReported)
+    .slice(0, args.limit);
+  if (rows.length === 0) {
+    return [];
+  }
+  const latest = rows[0];
+  const latestSurprise = parseNasdaqNumber(latest.percentageSurprise);
+  const latestEps = parseNasdaqNumber(latest.eps);
+  const latestForecast = parseNasdaqNumber(latest.consensusForecast);
+  const surpriseValues = rows
+    .map((row) => parseNasdaqNumber(row.percentageSurprise))
+    .filter((value): value is number => Number.isFinite(value));
+  const averageSurprise =
+    surpriseValues.length > 0
+      ? surpriseValues.reduce((sum, value) => sum + value, 0) /
+        surpriseValues.length
+      : undefined;
+  const positiveCount = surpriseValues.filter((value) => value > 0).length;
+  const negativeCount = surpriseValues.filter((value) => value < 0).length;
+  const publishedAt = parseNasdaqDate(latest.dateReported);
+
+  return [
+    {
+      source: "nasdaq_earnings_surprise",
+      sourceType: "company",
+      sourceId: `nasdaq:earnings-surprise:${ticker}:${latest.dateReported}`,
+      title: `${ticker} earnings surprise history`,
+      url: `https://www.nasdaq.com/market-activity/stocks/${ticker.toLowerCase()}/earnings`,
+      publishedAt,
+      discoveredAt: args.fetchedAt,
+      fetchedAt: args.fetchedAt,
+      body: [
+        `Latest reported quarter: ${latest.fiscalQtrEnd ?? "unknown"}`,
+        latest.dateReported ? `Date reported: ${latest.dateReported}` : "",
+        latestEps !== undefined ? `EPS: ${latestEps}` : "",
+        latestForecast !== undefined
+          ? `Consensus EPS forecast: ${latestForecast}`
+          : "",
+        formatPercent(latestSurprise)
+          ? `Latest EPS surprise: ${formatPercent(latestSurprise)}`
+          : "",
+        averageSurprise !== undefined
+          ? `Average surprise across ${rows.length} rows: ${formatPercent(averageSurprise)}`
+          : "",
+        `Surprise trend: ${positiveCount} positive / ${negativeCount} negative`,
+        "Recent earnings surprise history helps judge execution momentum and whether current guidance/news is fighting or confirming prior results.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      rawPayload: {
+        rows,
+        latest,
+        latestSurprise,
+        latestEps,
+        latestForecast,
+        averageSurprise,
+        positiveCount,
+        negativeCount,
+      },
+      tickers: [ticker],
+    },
+  ];
+}
+
+async function collectNasdaqAnalystAndEarnings(
+  entry: UniverseEntry,
+  preset: DeepResearchPreset,
+): Promise<SourceCollectionResult> {
+  const startedAt = new Date();
+  const ticker = normalizeTicker(entry.ticker);
+  const earningsLimit = envNumber(
+    "INTEL_NASDAQ_EARNINGS_SURPRISE_LIMIT",
+    presetLimit(preset, { fast: 4, deep: 8, exhaustive: 12 }),
+  );
+  const targetUrl = new URL(
+    `/api/analyst/${encodeURIComponent(ticker)}/targetprice`,
+    NASDAQ_BASE_URL,
+  );
+  const surpriseUrl = new URL(
+    `/api/company/${encodeURIComponent(ticker)}/earnings-surprise`,
+    NASDAQ_BASE_URL,
+  );
+
+  const [target, surprise] = await Promise.all([
+    fetchJson<NasdaqTargetPriceResponse>(targetUrl, nasdaqHeaders()),
+    fetchJson<NasdaqEarningsSurpriseResponse>(surpriseUrl, nasdaqHeaders()),
+  ]);
+  const fetchedAt = new Date();
+  const targetItems = target.data
+    ? buildNasdaqAnalystTargetItems({
+        response: target.data,
+        ticker,
+        fetchedAt,
+      })
+    : [];
+  const surpriseItems = surprise.data
+    ? buildNasdaqEarningsSurpriseItems({
+        response: surprise.data,
+        ticker,
+        fetchedAt,
+        limit: earningsLimit,
+      })
+    : [];
+
+  return {
+    items: [...targetItems, ...surpriseItems],
+    diagnostics: [
+      makeDiagnostic({
+        source: "nasdaq_analyst_target",
+        label: `ticker-analyst-target:${ticker}`,
+        startedAt,
+        status: target.status === 200 ? "ok" : "failed",
+        itemCount: targetItems.length,
+        message:
+          target.status === 200
+            ? undefined
+            : `HTTP ${target.status}: ${target.text.slice(0, 160)}`,
+        metadata: { ticker },
+      }),
+      makeDiagnostic({
+        source: "nasdaq_earnings_surprise",
+        label: `ticker-earnings-surprise:${ticker}`,
+        startedAt,
+        status: surprise.status === 200 ? "ok" : "failed",
+        itemCount: surpriseItems.length,
+        message:
+          surprise.status === 200
+            ? undefined
+            : `HTTP ${surprise.status}: ${surprise.text.slice(0, 160)}`,
+        metadata: {
+          ticker,
+          limit: earningsLimit,
+          returnedRows:
+            surprise.data?.data?.earningsSurpriseTable?.rows?.length ?? 0,
+        },
+      }),
+    ],
+  };
+}
+
 export function buildFinnhubEarningsCalendarItems(args: {
   response: FinnhubEarningsCalendarResponse;
   ticker: string;
@@ -1825,6 +2091,7 @@ export async function collectDeepSourceItems(
     earnings,
     chart,
     nasdaq,
+    nasdaqAnalyst,
     rss,
     releases,
     social,
@@ -1835,6 +2102,7 @@ export async function collectDeepSourceItems(
     collectFinnhubEarningsCalendar(entry, horizon),
     collectYahooChartContext(entry, horizon),
     collectNasdaqPositioning(entry, preset),
+    collectNasdaqAnalystAndEarnings(entry, preset),
     collectRss(entry, horizon, preset),
     collectCompanyReleases(entry, horizon, preset),
     collectSocial(entry, horizon, preset),
@@ -1848,6 +2116,7 @@ export async function collectDeepSourceItems(
       ...earnings.items,
       ...chart.items,
       ...nasdaq.items,
+      ...nasdaqAnalyst.items,
       ...rss.items,
       ...releases.items,
       ...social.items,
@@ -1859,6 +2128,7 @@ export async function collectDeepSourceItems(
       ...earnings.diagnostics,
       ...chart.diagnostics,
       ...nasdaq.diagnostics,
+      ...nasdaqAnalyst.diagnostics,
       ...rss.diagnostics,
       ...releases.diagnostics,
       ...social.diagnostics,

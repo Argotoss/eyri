@@ -528,3 +528,45 @@ Remaining after this milestone:
 - Options flow direction, sweeps, Greeks, and implied-volatility surfaces are
   still missing.
 - Short interest is delayed by settlement/reporting schedule.
+
+### Nasdaq Analyst And Earnings Context Milestone
+
+Goal: add accessible analyst consensus and earnings execution context after
+Finnhub analyst endpoints and Yahoo quoteSummary were gated.
+
+Completed:
+
+- Added `nasdaq_analyst_target` collection from Nasdaq target-price consensus.
+- Added `nasdaq_earnings_surprise` collection from Nasdaq earnings surprise
+  history.
+- Aggregates analyst target range, consensus target, buy/hold/sell mix, and
+  historical target change into one research item.
+- Aggregates recent EPS surprise history into one company execution item with
+  latest surprise, average surprise, and positive/negative trend.
+- Added `INTEL_NASDAQ_EARNINGS_SURPRISE_LIMIT`.
+- Added parser tests and source registry tests for both sources.
+- Updated README source/control documentation.
+
+Verification:
+
+- `deno task format`
+- `deno task test` passed with 52 tests.
+- `deno check --allow-import src/main.ts`
+- Real isolated smoke run with OpenRouter signal review disabled:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 210 raw items
+  - 170 relevant items
+  - `nasdaq_analyst_target` diagnostic present and `ok` with 1 item
+  - `nasdaq_earnings_surprise` diagnostic present and `ok` with 1 item
+  - HTML report written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-04T22-39-37.html`
+  - evaluator sidecar written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-04T22-39-37.evaluator.json`
+  - GDELT returned HTTP 429; captured as nonfatal source failure.
+
+Remaining after this milestone:
+
+- Full analyst notes, estimate revision feed, and transcript text are still
+  missing.
+- Nasdaq analyst consensus can lag current notes.

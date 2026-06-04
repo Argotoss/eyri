@@ -236,6 +236,36 @@ const SOURCE_REGISTRY: Record<string, SourceProfile> = {
     limitations:
       "chain rows are capped and do not include full flow, sweeps, Greeks, or trade direction",
   },
+  nasdaq_analyst_target: {
+    key: "nasdaq_analyst_target",
+    displayName: "Nasdaq Analyst Targets",
+    category: "analyst_research",
+    reliability: "medium",
+    qualityScore: 80,
+    evidenceWeight: 0.76,
+    cost: "free",
+    rateLimit: "unofficial Nasdaq endpoint behavior",
+    freshness: "provider dependent",
+    coverage:
+      "consensus price target, low/high target range, buy/hold/sell mix, and historical consensus",
+    limitations:
+      "consensus data can lag current notes and does not expose full analyst rationale",
+  },
+  nasdaq_earnings_surprise: {
+    key: "nasdaq_earnings_surprise",
+    displayName: "Nasdaq Earnings Surprise",
+    category: "fundamentals",
+    reliability: "high",
+    qualityScore: 82,
+    evidenceWeight: 0.8,
+    cost: "free",
+    rateLimit: "unofficial Nasdaq endpoint behavior",
+    freshness: "reported earnings dependent",
+    coverage:
+      "recent reported EPS, consensus forecast, EPS surprise, and surprise trend",
+    limitations:
+      "historical execution context only; it is not an upcoming earnings estimate feed",
+  },
   google_news: {
     key: "google_news",
     displayName: "Google News RSS",
