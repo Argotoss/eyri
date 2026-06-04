@@ -35,6 +35,14 @@ Deno.test("source registry exposes quality and metadata", () => {
     "expected chart context quality",
   );
   assert(
+    sourceQualityScore("nasdaq_short_interest") >= 80,
+    "expected short-interest quality",
+  );
+  assert(
+    getSourceProfile("nasdaq_options").category === "market_positioning",
+    "expected positioning category",
+  );
+  assert(
     getSourceProfile("finnhub_price_target").category === "analyst_research",
     "expected analyst category",
   );

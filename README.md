@@ -94,8 +94,9 @@ fundamental snapshots, catalyst summaries, and evidence links.
 research pipeline for a single requested ticker. It gathers ticker-specific SEC
 filings, GDELT articles, Alpaca/Benzinga news, Finnhub news/metrics/earnings
 calendar/analyst target/rating revision/social summaries, Yahoo chart context,
-Yahoo/Google RSS, release-focused company/IR news discovery, optional Reddit
-search, StockTwits messages, optional full text from linked articles, and the existing
+Nasdaq short-interest/options positioning, Yahoo/Google RSS, release-focused
+company/IR news discovery, optional Reddit search, StockTwits messages,
+optional full text from linked articles, and the existing
 price/fundamental snapshots. The attached report is built from scored evidence
 packets, with raw source lists moved into expandable appendices.
 Each raw item is distilled into a signal tier (`critical`, `high`, `medium`,
@@ -133,7 +134,7 @@ Optional scan/source controls include `EYRI_REPORTS_DIR`,
 `INTEL_GDELT_SP500_FOCUS_LIMIT`, `INTEL_GDELT_429_BACKOFF_MS`,
 `INTEL_FULLTEXT_LIMIT`, `INTEL_FULLTEXT_CONCURRENCY`,
 `INTEL_FULLTEXT_TIMEOUT_MS`, `INTEL_COMPANY_RELEASE_RSS_LIMIT`,
-`INTEL_FINNHUB_UPGRADE_DOWNGRADE_LIMIT`,
+`INTEL_FINNHUB_UPGRADE_DOWNGRADE_LIMIT`, `INTEL_NASDAQ_OPTIONS_LIMIT`,
 `INTEL_SIGNAL_REVIEW_ENABLED`, `INTEL_SIGNAL_MODEL`,
 `INTEL_SIGNAL_REVIEW_LIMIT`, `REDDIT_BEARER_TOKEN`, and `INTEL_REDDIT_ALLOW_UNAUTH`.
 

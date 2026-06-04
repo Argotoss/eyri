@@ -5,6 +5,7 @@ export type SourceCategory =
   | "fundamentals"
   | "event_calendar"
   | "analyst_research"
+  | "market_positioning"
   | "primary_filings"
   | "company_release"
   | "news"
@@ -205,6 +206,36 @@ const SOURCE_REGISTRY: Record<string, SourceProfile> = {
     limitations:
       "technical context only; it explains market reaction but not the underlying catalyst",
   },
+  nasdaq_short_interest: {
+    key: "nasdaq_short_interest",
+    displayName: "Nasdaq Short Interest",
+    category: "market_positioning",
+    reliability: "high",
+    qualityScore: 82,
+    evidenceWeight: 0.78,
+    cost: "free",
+    rateLimit: "unofficial Nasdaq endpoint behavior",
+    freshness: "settlement-date dependent",
+    coverage:
+      "short interest, average daily share volume, days to cover, and change versus previous settlement",
+    limitations:
+      "short interest is delayed by settlement/reporting schedule and is not intraday positioning",
+  },
+  nasdaq_options: {
+    key: "nasdaq_options",
+    displayName: "Nasdaq Options Chain",
+    category: "market_positioning",
+    reliability: "medium",
+    qualityScore: 74,
+    evidenceWeight: 0.68,
+    cost: "free",
+    rateLimit: "unofficial Nasdaq endpoint behavior",
+    freshness: "provider dependent",
+    coverage:
+      "option-chain volume, open interest, put/call ratios, and crowded strikes",
+    limitations:
+      "chain rows are capped and do not include full flow, sweeps, Greeks, or trade direction",
+  },
   google_news: {
     key: "google_news",
     displayName: "Google News RSS",
@@ -381,6 +412,9 @@ export function sourceCoverageGaps(args: {
   }
   if (!categories.has("analyst_research")) {
     gaps.push("No analyst research or revision source completed.");
+  }
+  if (!categories.has("market_positioning")) {
+    gaps.push("No options or short-interest positioning source completed.");
   }
   if (!categories.has("news") && !categories.has("news_discovery")) {
     gaps.push("No news source completed.");

@@ -9,6 +9,7 @@ import type {
 
 const ALPACA_DATA_BASE_URL = "https://data.alpaca.markets";
 const FINNHUB_BASE_URL = "https://finnhub.io/api/v1";
+const NASDAQ_BASE_URL = "https://api.nasdaq.com";
 const YAHOO_CHART_BASE_URL = "https://query1.finance.yahoo.com";
 const GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search";
 const YAHOO_FINANCE_RSS_URL =
@@ -112,6 +113,46 @@ type YahooChartResponse = {
       };
     }>;
     error?: unknown;
+  };
+};
+
+type NasdaqShortInterestRow = {
+  settlementDate?: string;
+  interest?: string | number | null;
+  avgDailyShareVolume?: string | number | null;
+  daysToCover?: string | number | null;
+};
+
+type NasdaqShortInterestResponse = {
+  data?: {
+    symbol?: string;
+    shortInterestTable?: {
+      rows?: NasdaqShortInterestRow[];
+    };
+  };
+};
+
+type NasdaqOptionRow = {
+  expirygroup?: string | null;
+  expiryDate?: string | null;
+  c_Volume?: string | number | null;
+  c_Openinterest?: string | number | null;
+  c_Bid?: string | number | null;
+  c_Ask?: string | number | null;
+  strike?: string | number | null;
+  p_Volume?: string | number | null;
+  p_Openinterest?: string | number | null;
+  p_Bid?: string | number | null;
+  p_Ask?: string | number | null;
+};
+
+type NasdaqOptionsResponse = {
+  data?: {
+    totalRecord?: number;
+    lastTrade?: string;
+    table?: {
+      rows?: NasdaqOptionRow[];
+    };
   };
 };
 
@@ -219,6 +260,32 @@ function parseDate(value: string | number | undefined) {
 function toNumber(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseNasdaqNumber(value: unknown) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.replace(/[$,%\s,]/g, "");
+  if (!normalized || normalized === "--") {
+    return undefined;
+  }
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseNasdaqDate(value: string | undefined) {
+  const match = value?.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) {
+    return parseDate(value);
+  }
+  const [, month, day, year] = match;
+  return new Date(
+    Date.UTC(Number(year), Number(month) - 1, Number(day), 0, 0, 0),
+  );
 }
 
 function formatOptionalNumber(label: string, value: number | null | undefined) {
@@ -1006,6 +1073,327 @@ async function collectYahooChartContext(
   };
 }
 
+function formatCompactNumber(value: number | undefined) {
+  if (!Number.isFinite(value)) {
+    return "";
+  }
+  const numeric = value as number;
+  if (Math.abs(numeric) >= 1_000_000_000) {
+    return `${(numeric / 1_000_000_000).toFixed(2)}B`;
+  }
+  if (Math.abs(numeric) >= 1_000_000) {
+    return `${(numeric / 1_000_000).toFixed(2)}M`;
+  }
+  if (Math.abs(numeric) >= 1_000) {
+    return `${(numeric / 1_000).toFixed(1)}K`;
+  }
+  return numeric.toFixed(0);
+}
+
+function ratio(value: number | undefined) {
+  return Number.isFinite(value) ? (value as number).toFixed(2) : "";
+}
+
+export function buildNasdaqShortInterestItems(args: {
+  response: NasdaqShortInterestResponse;
+  ticker: string;
+  fetchedAt: Date;
+}): IntelRawItemInput[] {
+  const ticker = normalizeTicker(args.ticker);
+  const responseTicker = normalizeTicker(args.response.data?.symbol ?? ticker);
+  if (responseTicker !== ticker) {
+    return [];
+  }
+  const rows = args.response.data?.shortInterestTable?.rows ?? [];
+  const latest = rows[0];
+  if (!latest?.settlementDate) {
+    return [];
+  }
+  const previous = rows[1];
+  const latestInterest = parseNasdaqNumber(latest.interest);
+  const previousInterest = parseNasdaqNumber(previous?.interest);
+  const interestChange = percentChange(latestInterest, previousInterest);
+  const avgDailyVolume = parseNasdaqNumber(latest.avgDailyShareVolume);
+  const daysToCover = parseNasdaqNumber(latest.daysToCover);
+  const publishedAt = parseNasdaqDate(latest.settlementDate);
+
+  return [
+    {
+      source: "nasdaq_short_interest",
+      sourceType: "research",
+      sourceId: `nasdaq:short-interest:${ticker}:${latest.settlementDate}`,
+      title: `${ticker} short interest snapshot`,
+      url: `https://www.nasdaq.com/market-activity/stocks/${ticker.toLowerCase()}/short-interest`,
+      publishedAt,
+      discoveredAt: args.fetchedAt,
+      fetchedAt: args.fetchedAt,
+      body: [
+        `Settlement date: ${latest.settlementDate}`,
+        latestInterest
+          ? `Short interest: ${formatCompactNumber(latestInterest)} shares`
+          : "",
+        avgDailyVolume
+          ? `Average daily share volume: ${formatCompactNumber(avgDailyVolume)}`
+          : "",
+        daysToCover ? `Days to cover: ${ratio(daysToCover)}` : "",
+        formatPercent(interestChange)
+          ? `Change vs previous settlement: ${formatPercent(interestChange)}`
+          : "",
+        previous?.settlementDate && previousInterest
+          ? `Previous settlement ${previous.settlementDate}: ${formatCompactNumber(previousInterest)} shares`
+          : "",
+        "Short interest is a positioning/risk signal, not a standalone catalyst; rising short interest can increase squeeze potential or show bearish conviction.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      rawPayload: {
+        latest,
+        previous,
+        latestInterest,
+        previousInterest,
+        interestChange,
+        avgDailyVolume,
+        daysToCover,
+      },
+      tickers: [ticker],
+    },
+  ];
+}
+
+function topOptionRows(
+  rows: NasdaqOptionRow[],
+  side: "call" | "put",
+  metric: "volume" | "openInterest",
+  limit = 3,
+) {
+  const prefix = side === "call" ? "c" : "p";
+  const key = `${prefix}_${metric === "volume" ? "Volume" : "Openinterest"}` as
+    | "c_Volume"
+    | "c_Openinterest"
+    | "p_Volume"
+    | "p_Openinterest";
+  return rows
+    .map((row) => ({
+      row,
+      value: parseNasdaqNumber(row[key]),
+    }))
+    .filter((entry): entry is { row: NasdaqOptionRow; value: number } =>
+      Number.isFinite(entry.value),
+    )
+    .sort((left, right) => right.value - left.value)
+    .slice(0, limit);
+}
+
+function optionLabel(row: NasdaqOptionRow) {
+  const expiry = row.expiryDate || row.expirygroup || "unknown expiry";
+  const strike = parseNasdaqNumber(row.strike);
+  return `${expiry} ${strike ? strike.toFixed(2) : "unknown strike"}`;
+}
+
+export function buildNasdaqOptionsItems(args: {
+  response: NasdaqOptionsResponse;
+  ticker: string;
+  fetchedAt: Date;
+  limit: number;
+}): IntelRawItemInput[] {
+  const ticker = normalizeTicker(args.ticker);
+  const rows = (args.response.data?.table?.rows ?? [])
+    .filter((row) => parseNasdaqNumber(row.strike) !== undefined)
+    .slice(0, args.limit);
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const callVolume = rows.reduce(
+    (sum, row) => sum + (parseNasdaqNumber(row.c_Volume) ?? 0),
+    0,
+  );
+  const putVolume = rows.reduce(
+    (sum, row) => sum + (parseNasdaqNumber(row.p_Volume) ?? 0),
+    0,
+  );
+  const callOpenInterest = rows.reduce(
+    (sum, row) => sum + (parseNasdaqNumber(row.c_Openinterest) ?? 0),
+    0,
+  );
+  const putOpenInterest = rows.reduce(
+    (sum, row) => sum + (parseNasdaqNumber(row.p_Openinterest) ?? 0),
+    0,
+  );
+  const putCallVolumeRatio =
+    callVolume > 0 ? putVolume / callVolume : undefined;
+  const putCallOpenInterestRatio =
+    callOpenInterest > 0 ? putOpenInterest / callOpenInterest : undefined;
+  const topCallVolume = topOptionRows(rows, "call", "volume");
+  const topPutVolume = topOptionRows(rows, "put", "volume");
+  const topCallOpenInterest = topOptionRows(rows, "call", "openInterest");
+  const topPutOpenInterest = topOptionRows(rows, "put", "openInterest");
+
+  return [
+    {
+      source: "nasdaq_options",
+      sourceType: "market",
+      sourceId: `nasdaq:options:${ticker}:${nowIso().slice(0, 13)}:${rows.length}`,
+      title: `${ticker} options positioning snapshot`,
+      url: `https://www.nasdaq.com/market-activity/stocks/${ticker.toLowerCase()}/option-chain`,
+      publishedAt: args.fetchedAt,
+      discoveredAt: args.fetchedAt,
+      fetchedAt: args.fetchedAt,
+      body: [
+        args.response.data?.lastTrade ?? "",
+        `Rows analyzed: ${rows.length}${args.response.data?.totalRecord ? ` / ${args.response.data.totalRecord} total` : ""}`,
+        `Call volume: ${formatCompactNumber(callVolume)}`,
+        `Put volume: ${formatCompactNumber(putVolume)}`,
+        ratio(putCallVolumeRatio)
+          ? `Put/call volume ratio: ${ratio(putCallVolumeRatio)}`
+          : "",
+        `Call open interest: ${formatCompactNumber(callOpenInterest)}`,
+        `Put open interest: ${formatCompactNumber(putOpenInterest)}`,
+        ratio(putCallOpenInterestRatio)
+          ? `Put/call open-interest ratio: ${ratio(putCallOpenInterestRatio)}`
+          : "",
+        topCallVolume.length > 0
+          ? `Top call volume: ${topCallVolume
+              .map(
+                (entry) =>
+                  `${optionLabel(entry.row)} (${formatCompactNumber(entry.value)})`,
+              )
+              .join("; ")}`
+          : "",
+        topPutVolume.length > 0
+          ? `Top put volume: ${topPutVolume
+              .map(
+                (entry) =>
+                  `${optionLabel(entry.row)} (${formatCompactNumber(entry.value)})`,
+              )
+              .join("; ")}`
+          : "",
+        topCallOpenInterest.length > 0
+          ? `Top call open interest: ${topCallOpenInterest
+              .map(
+                (entry) =>
+                  `${optionLabel(entry.row)} (${formatCompactNumber(entry.value)})`,
+              )
+              .join("; ")}`
+          : "",
+        topPutOpenInterest.length > 0
+          ? `Top put open interest: ${topPutOpenInterest
+              .map(
+                (entry) =>
+                  `${optionLabel(entry.row)} (${formatCompactNumber(entry.value)})`,
+              )
+              .join("; ")}`
+          : "",
+        "Options activity is a positioning signal; use it to find crowded strikes, hedging pressure, or speculative attention around catalysts.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      rawPayload: {
+        totalRecord: args.response.data?.totalRecord,
+        lastTrade: args.response.data?.lastTrade,
+        analyzedRows: rows.length,
+        callVolume,
+        putVolume,
+        callOpenInterest,
+        putOpenInterest,
+        putCallVolumeRatio,
+        putCallOpenInterestRatio,
+        topCallVolume,
+        topPutVolume,
+        topCallOpenInterest,
+        topPutOpenInterest,
+      },
+      tickers: [ticker],
+    },
+  ];
+}
+
+function nasdaqHeaders() {
+  return {
+    Accept: "application/json",
+    Referer: "https://www.nasdaq.com/",
+    "User-Agent": "Mozilla/5.0",
+  };
+}
+
+async function collectNasdaqPositioning(
+  entry: UniverseEntry,
+  preset: DeepResearchPreset,
+): Promise<SourceCollectionResult> {
+  const startedAt = new Date();
+  const ticker = normalizeTicker(entry.ticker);
+  const optionsLimit = envNumber(
+    "INTEL_NASDAQ_OPTIONS_LIMIT",
+    presetLimit(preset, { fast: 250, deep: 600, exhaustive: 1200 }),
+  );
+  const shortInterestUrl = new URL(
+    `/api/quote/${encodeURIComponent(ticker)}/short-interest`,
+    NASDAQ_BASE_URL,
+  );
+  shortInterestUrl.searchParams.set("assetclass", "stocks");
+  const optionsUrl = new URL(
+    `/api/quote/${encodeURIComponent(ticker)}/option-chain`,
+    NASDAQ_BASE_URL,
+  );
+  optionsUrl.searchParams.set("assetclass", "stocks");
+  optionsUrl.searchParams.set("limit", String(optionsLimit));
+
+  const [shortInterest, options] = await Promise.all([
+    fetchJson<NasdaqShortInterestResponse>(shortInterestUrl, nasdaqHeaders()),
+    fetchJson<NasdaqOptionsResponse>(optionsUrl, nasdaqHeaders()),
+  ]);
+  const fetchedAt = new Date();
+  const shortInterestItems = shortInterest.data
+    ? buildNasdaqShortInterestItems({
+        response: shortInterest.data,
+        ticker,
+        fetchedAt,
+      })
+    : [];
+  const optionItems = options.data
+    ? buildNasdaqOptionsItems({
+        response: options.data,
+        ticker,
+        fetchedAt,
+        limit: optionsLimit,
+      })
+    : [];
+
+  return {
+    items: [...shortInterestItems, ...optionItems],
+    diagnostics: [
+      makeDiagnostic({
+        source: "nasdaq_short_interest",
+        label: `ticker-short-interest:${ticker}`,
+        startedAt,
+        status: shortInterest.status === 200 ? "ok" : "failed",
+        itemCount: shortInterestItems.length,
+        message:
+          shortInterest.status === 200
+            ? undefined
+            : `HTTP ${shortInterest.status}: ${shortInterest.text.slice(0, 160)}`,
+        metadata: { ticker },
+      }),
+      makeDiagnostic({
+        source: "nasdaq_options",
+        label: `ticker-options:${ticker}`,
+        startedAt,
+        status: options.status === 200 ? "ok" : "failed",
+        itemCount: optionItems.length,
+        message:
+          options.status === 200
+            ? undefined
+            : `HTTP ${options.status}: ${options.text.slice(0, 160)}`,
+        metadata: {
+          ticker,
+          limit: optionsLimit,
+          returnedRows: options.data?.data?.table?.rows?.length ?? 0,
+        },
+      }),
+    ],
+  };
+}
+
 export function buildFinnhubEarningsCalendarItems(args: {
   response: FinnhubEarningsCalendarResponse;
   ticker: string;
@@ -1430,17 +1818,27 @@ export async function collectDeepSourceItems(
   horizon: IntelHorizon,
   preset: DeepResearchPreset = "deep",
 ): Promise<SourceCollectionResult> {
-  const [alpaca, finnhub, analyst, earnings, chart, rss, releases, social] =
-    await Promise.all([
-      collectAlpacaNews(entry, horizon, preset),
-      collectFinnhub(entry, horizon, preset),
-      collectFinnhubAnalystSignals(entry, horizon, preset),
-      collectFinnhubEarningsCalendar(entry, horizon),
-      collectYahooChartContext(entry, horizon),
-      collectRss(entry, horizon, preset),
-      collectCompanyReleases(entry, horizon, preset),
-      collectSocial(entry, horizon, preset),
-    ]);
+  const [
+    alpaca,
+    finnhub,
+    analyst,
+    earnings,
+    chart,
+    nasdaq,
+    rss,
+    releases,
+    social,
+  ] = await Promise.all([
+    collectAlpacaNews(entry, horizon, preset),
+    collectFinnhub(entry, horizon, preset),
+    collectFinnhubAnalystSignals(entry, horizon, preset),
+    collectFinnhubEarningsCalendar(entry, horizon),
+    collectYahooChartContext(entry, horizon),
+    collectNasdaqPositioning(entry, preset),
+    collectRss(entry, horizon, preset),
+    collectCompanyReleases(entry, horizon, preset),
+    collectSocial(entry, horizon, preset),
+  ]);
 
   return {
     items: [
@@ -1449,6 +1847,7 @@ export async function collectDeepSourceItems(
       ...analyst.items,
       ...earnings.items,
       ...chart.items,
+      ...nasdaq.items,
       ...rss.items,
       ...releases.items,
       ...social.items,
@@ -1459,6 +1858,7 @@ export async function collectDeepSourceItems(
       ...analyst.diagnostics,
       ...earnings.diagnostics,
       ...chart.diagnostics,
+      ...nasdaq.diagnostics,
       ...rss.diagnostics,
       ...releases.diagnostics,
       ...social.diagnostics,

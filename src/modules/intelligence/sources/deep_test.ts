@@ -3,6 +3,8 @@ import {
   buildFinnhubEarningsCalendarItems,
   buildFinnhubPriceTargetItems,
   buildFinnhubUpgradeDowngradeItems,
+  buildNasdaqOptionsItems,
+  buildNasdaqShortInterestItems,
   buildYahooChartContextItems,
   companyReleaseSearchQuery,
 } from "./deep.ts";
@@ -192,6 +194,116 @@ Deno.test("Yahoo chart rows become market context evidence", () => {
   assert(
     items[0].publishedAt.toISOString() === "2026-06-04T12:00:00.000Z",
     "expected market timestamp",
+  );
+});
+
+Deno.test("Nasdaq short interest rows become positioning evidence", () => {
+  const fetchedAt = new Date("2026-06-04T12:00:00.000Z");
+  const items = buildNasdaqShortInterestItems({
+    ticker: "MU",
+    fetchedAt,
+    response: {
+      data: {
+        symbol: "MU",
+        shortInterestTable: {
+          rows: [
+            {
+              settlementDate: "05/15/2026",
+              interest: "35,235,443",
+              avgDailyShareVolume: "54,391,136",
+              daysToCover: 1,
+            },
+            {
+              settlementDate: "04/30/2026",
+              interest: "37,273,548",
+              avgDailyShareVolume: "36,277,062",
+              daysToCover: 1.027469,
+            },
+          ],
+        },
+      },
+    },
+  });
+
+  assert(items.length === 1, "expected one short-interest item");
+  assert(
+    items[0].source === "nasdaq_short_interest",
+    "expected short-interest source",
+  );
+  assert(items[0].sourceType === "research", "expected research source type");
+  assert(
+    items[0].body?.includes("Short interest: 35.24M shares"),
+    "expected latest interest",
+  );
+  assert(
+    items[0].body?.includes("Change vs previous settlement: -5.47%"),
+    "expected short-interest change",
+  );
+  assert(
+    items[0].publishedAt.toISOString().startsWith("2026-05-15"),
+    "expected settlement date",
+  );
+});
+
+Deno.test("Nasdaq options rows become aggregate positioning evidence", () => {
+  const fetchedAt = new Date("2026-06-04T12:00:00.000Z");
+  const items = buildNasdaqOptionsItems({
+    ticker: "MU",
+    fetchedAt,
+    limit: 3,
+    response: {
+      data: {
+        totalRecord: 4,
+        lastTrade: "LAST TRADE: $996 (AS OF JUN 4, 2026)",
+        table: {
+          rows: [
+            {
+              expirygroup: "June 5, 2026",
+              strike: null,
+            },
+            {
+              expiryDate: "Jun 5",
+              strike: "900.00",
+              c_Volume: "120",
+              c_Openinterest: "1,000",
+              p_Volume: "60",
+              p_Openinterest: "500",
+            },
+            {
+              expiryDate: "Jun 5",
+              strike: "1,000.00",
+              c_Volume: "80",
+              c_Openinterest: "600",
+              p_Volume: "140",
+              p_Openinterest: "1,200",
+            },
+            {
+              expiryDate: "Jun 12",
+              strike: "1,050.00",
+              c_Volume: "20",
+              c_Openinterest: "300",
+              p_Volume: "--",
+              p_Openinterest: "100",
+            },
+          ],
+        },
+      },
+    },
+  });
+
+  assert(items.length === 1, "expected one options item");
+  assert(items[0].source === "nasdaq_options", "expected options source");
+  assert(items[0].sourceType === "market", "expected market source type");
+  assert(items[0].body?.includes("Rows analyzed: 3 / 4 total"), "expected cap");
+  assert(items[0].body?.includes("Call volume: 220"), "expected call volume");
+  assert(items[0].body?.includes("Put volume: 200"), "expected put volume");
+  assert(
+    items[0].body?.includes("Put/call volume ratio: 0.91"),
+    "expected put/call volume ratio",
+  );
+  assert(
+    items[0].body?.includes("Top put open interest: Jun 5 1000.00"),
+    "expected top put open interest",
   );
 });
 

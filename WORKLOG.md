@@ -487,3 +487,44 @@ Remaining after this milestone:
 - Yahoo quoteSummary analyst/fundamental modules still require crumb access in
   this environment.
 - Options-chain context is still missing.
+
+### Nasdaq Positioning Milestone
+
+Goal: add accessible market-positioning context after Yahoo options and
+quoteSummary endpoints required crumb access.
+
+Completed:
+
+- Added `nasdaq_short_interest` collection from Nasdaq short-interest rows.
+- Added `nasdaq_options` collection from Nasdaq option-chain rows.
+- Aggregates option-chain rows into call/put volume, call/put open interest,
+  put/call ratios, and top volume/open-interest strikes instead of storing the
+  full chain as raw noise.
+- Added `market_positioning` source category and source registry metadata.
+- Added `INTEL_NASDAQ_OPTIONS_LIMIT` to cap option rows per ticker/preset.
+- Added parser tests for short-interest and options aggregation.
+- Updated README source/control documentation.
+
+Verification:
+
+- `deno task format`
+- `deno task test` passed with 50 tests.
+- `deno check --allow-import src/main.ts`
+- Real isolated smoke run with OpenRouter signal review disabled:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 208 raw items
+  - 168 relevant items
+  - `nasdaq_short_interest` diagnostic present and `ok` with 1 item
+  - `nasdaq_options` diagnostic present and `ok` with 1 item
+  - HTML report written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-04T22-30-42.html`
+  - evaluator sidecar written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-04T22-30-42.evaluator.json`
+  - GDELT returned HTTP 429; captured as nonfatal source failure.
+
+Remaining after this milestone:
+
+- Options flow direction, sweeps, Greeks, and implied-volatility surfaces are
+  still missing.
+- Short interest is delayed by settlement/reporting schedule.
