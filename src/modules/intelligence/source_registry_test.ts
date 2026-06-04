@@ -51,6 +51,14 @@ Deno.test("source registry exposes quality and metadata", () => {
     "expected earnings surprise fundamentals category",
   );
   assert(
+    sourceQualityScore("nasdaq_institutional_ownership") >= 70,
+    "expected institutional ownership quality",
+  );
+  assert(
+    getSourceProfile("nasdaq_insider_trades").category === "ownership",
+    "expected ownership category",
+  );
+  assert(
     getSourceProfile("finnhub_price_target").category === "analyst_research",
     "expected analyst category",
   );

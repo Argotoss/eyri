@@ -5,6 +5,8 @@ import {
   buildFinnhubUpgradeDowngradeItems,
   buildNasdaqAnalystTargetItems,
   buildNasdaqEarningsSurpriseItems,
+  buildNasdaqInsiderTradeItems,
+  buildNasdaqInstitutionalOwnershipItems,
   buildNasdaqOptionsItems,
   buildNasdaqShortInterestItems,
   buildYahooChartContextItems,
@@ -426,6 +428,145 @@ Deno.test("Nasdaq earnings surprise rows become execution evidence", () => {
   assert(
     items[0].publishedAt.toISOString().startsWith("2026-03-18"),
     "expected reported date",
+  );
+});
+
+Deno.test("Nasdaq institutional ownership becomes sponsorship evidence", () => {
+  const fetchedAt = new Date("2026-06-04T12:00:00.000Z");
+  const items = buildNasdaqInstitutionalOwnershipItems({
+    ticker: "MU",
+    fetchedAt,
+    response: {
+      data: {
+        institutionalOwnership: {
+          holdings: "86.72%",
+          holders: "3,234",
+          sharesHeld: "977,962,539",
+          holdingsValue: "1,055,779,018,228",
+          netActivity: "104,332,944",
+        },
+        top5Holders: [
+          { name: "VANGUARD GROUP INC", shares: "106,608,094" },
+          { name: "BLACKROCK, INC.", shares: "103,147,586" },
+        ],
+      },
+    },
+  });
+
+  assert(items.length === 1, "expected one ownership item");
+  assert(
+    items[0].source === "nasdaq_institutional_ownership",
+    "expected institutional source",
+  );
+  assert(items[0].sourceType === "research", "expected research source type");
+  assert(
+    items[0].body?.includes("Institutional ownership: 86.72%"),
+    "expected ownership percentage",
+  );
+  assert(
+    items[0].body?.includes("Net institutional activity: 104.33M shares"),
+    "expected net activity",
+  );
+  assert(items[0].body?.includes("VANGUARD GROUP INC"), "expected top holder");
+});
+
+Deno.test("Nasdaq insider trades become alignment evidence", () => {
+  const fetchedAt = new Date("2026-06-04T12:00:00.000Z");
+  const items = buildNasdaqInsiderTradeItems({
+    ticker: "MU",
+    fetchedAt,
+    limit: 2,
+    response: {
+      data: {
+        numberOfTrades: {
+          rows: [
+            {
+              insiderTrade: "Number of Open Market Buys",
+              months3: "1",
+              months12: "20",
+            },
+            {
+              insiderTrade: "Number of Sells",
+              months3: "10",
+              months12: "89",
+            },
+          ],
+        },
+        numberOfSharesTraded: {
+          rows: [
+            {
+              insiderTrade: "Number of Shares Bought",
+              months3: "97",
+              months12: "321,926",
+            },
+            {
+              insiderTrade: "Number of Shares Sold",
+              months3: "161,327",
+              months12: "1,808,188",
+            },
+            {
+              insiderTrade: "Net Activity",
+              months3: "(161,230)",
+              months12: "(1,486,262)",
+            },
+          ],
+        },
+        transactionTable: {
+          totalRecords: "224",
+          table: {
+            rows: [
+              {
+                insider: "MEHROTRA SANJAY",
+                relation: "Officer",
+                lastDate: "5/29/2026",
+                transactionType: "Automatic Sell",
+                sharesTraded: "37,439",
+                lastPrice: "$942.14",
+              },
+              {
+                insider: "GOMO STEVEN J",
+                relation: "Director",
+                lastDate: "5/11/2026",
+                transactionType: "Sell",
+                sharesTraded: "2,000",
+                lastPrice: "$786.47",
+              },
+              {
+                insider: "EXTRA",
+                lastDate: "5/01/2026",
+                transactionType: "Buy",
+                sharesTraded: "1,000",
+              },
+            ],
+          },
+        },
+      },
+    },
+  });
+
+  assert(items.length === 1, "expected one insider item");
+  assert(
+    items[0].source === "nasdaq_insider_trades",
+    "expected insider source",
+  );
+  assert(items[0].sourceType === "company", "expected company source type");
+  assert(
+    items[0].body?.includes("3-month trades: 1 buys / 10 sells"),
+    "expected buy/sell counts",
+  );
+  assert(
+    items[0].body?.includes("3-month net insider activity: -161.2K shares"),
+    "expected parsed negative net activity",
+  );
+  assert(
+    items[0].body?.includes(
+      "Latest rows analyzed: 2 (0 buy-like / 2 sell-like)",
+    ),
+    "expected capped latest-row summary",
+  );
+  assert(
+    items[0].publishedAt.toISOString().startsWith("2026-05-29"),
+    "expected latest transaction date",
   );
 });
 

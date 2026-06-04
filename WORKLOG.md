@@ -570,3 +570,47 @@ Remaining after this milestone:
 - Full analyst notes, estimate revision feed, and transcript text are still
   missing.
 - Nasdaq analyst consensus can lag current notes.
+
+### Nasdaq Ownership Signals Milestone
+
+Goal: add accessible ownership/alignment context after transcript endpoints
+were unavailable.
+
+Completed:
+
+- Added `nasdaq_institutional_ownership` collection from Nasdaq ownership
+  summary.
+- Added `nasdaq_insider_trades` collection from Nasdaq insider-trades summary
+  and latest transaction rows.
+- Aggregates institutional ownership percentage, holder count, shares held,
+  holdings value, net institutional activity, and top holders.
+- Aggregates 3-month/12-month insider buy/sell counts, shares bought/sold,
+  net insider activity, and latest capped transactions.
+- Added `ownership` source category and coverage gap.
+- Added `INTEL_NASDAQ_INSIDER_TRADES_LIMIT`.
+- Added parser tests and source registry tests.
+- Updated README source/control documentation.
+
+Verification:
+
+- `deno task format`
+- `deno task test` passed with 54 tests.
+- `deno check --allow-import src/main.ts`
+- Real isolated smoke run with OpenRouter signal review disabled:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 251 raw items
+  - 178 relevant items
+  - `nasdaq_institutional_ownership` diagnostic present and `ok` with 1 item
+  - `nasdaq_insider_trades` diagnostic present and `ok` with 1 item
+  - `gdelt` diagnostic was `ok` with 40 items in this smoke run
+  - HTML report written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-04T22-49-06.html`
+  - evaluator sidecar written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-04T22-49-06.evaluator.json`
+
+Remaining after this milestone:
+
+- Transcript text is still unavailable through the probed Nasdaq endpoints.
+- Insider activity still needs interpretation of routine/automatic sales versus
+  open-market discretionary trades.

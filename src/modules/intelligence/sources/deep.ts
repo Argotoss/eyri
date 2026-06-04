@@ -197,6 +197,56 @@ type NasdaqEarningsSurpriseResponse = {
   };
 };
 
+type NasdaqOwnershipSummaryResponse = {
+  data?: {
+    institutionalOwnership?: {
+      holdings?: string | number | null;
+      holders?: string | number | null;
+      sharesHeld?: string | number | null;
+      holdingsValue?: string | number | null;
+      netActivity?: string | number | null;
+    };
+    top5Holders?: Array<{
+      name?: string;
+      shares?: string | number | null;
+    }>;
+  };
+};
+
+type NasdaqInsiderTradeSummaryRow = {
+  insiderTrade?: string;
+  months3?: string | number | null;
+  months12?: string | number | null;
+};
+
+type NasdaqInsiderTransactionRow = {
+  insider?: string;
+  relation?: string;
+  lastDate?: string;
+  transactionType?: string;
+  ownType?: string;
+  sharesTraded?: string | number | null;
+  lastPrice?: string | number | null;
+  sharesHeld?: string | number | null;
+};
+
+type NasdaqInsiderTradesResponse = {
+  data?: {
+    numberOfTrades?: {
+      rows?: NasdaqInsiderTradeSummaryRow[];
+    };
+    numberOfSharesTraded?: {
+      rows?: NasdaqInsiderTradeSummaryRow[];
+    };
+    transactionTable?: {
+      totalRecords?: string | number | null;
+      table?: {
+        rows?: NasdaqInsiderTransactionRow[];
+      };
+    };
+  };
+};
+
 type RedditChild = {
   data?: {
     id?: string;
@@ -310,12 +360,14 @@ function parseNasdaqNumber(value: unknown) {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.replace(/[$,%\s,]/g, "");
+  const trimmed = value.trim();
+  const isNegative = /^\(.+\)$/.test(trimmed);
+  const normalized = trimmed.replace(/[()$,%\s,]/g, "");
   if (!normalized || normalized === "--") {
     return undefined;
   }
   const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return Number.isFinite(parsed) ? (isNegative ? -parsed : parsed) : undefined;
 }
 
 function parseNasdaqDate(value: string | undefined) {
@@ -1660,6 +1712,290 @@ async function collectNasdaqAnalystAndEarnings(
   };
 }
 
+export function buildNasdaqInstitutionalOwnershipItems(args: {
+  response: NasdaqOwnershipSummaryResponse;
+  ticker: string;
+  fetchedAt: Date;
+}): IntelRawItemInput[] {
+  const ticker = normalizeTicker(args.ticker);
+  const ownership = args.response.data?.institutionalOwnership;
+  if (!ownership) {
+    return [];
+  }
+  const holdingsPct = parseNasdaqNumber(ownership.holdings);
+  const holders = parseNasdaqNumber(ownership.holders);
+  const sharesHeld = parseNasdaqNumber(ownership.sharesHeld);
+  const holdingsValue = parseNasdaqNumber(ownership.holdingsValue);
+  const netActivity = parseNasdaqNumber(ownership.netActivity);
+  const topHolders = (args.response.data?.top5Holders ?? [])
+    .filter((holder) => holder.name)
+    .slice(0, 5);
+
+  return [
+    {
+      source: "nasdaq_institutional_ownership",
+      sourceType: "research",
+      sourceId: `nasdaq:institutional-ownership:${ticker}:${nowIso().slice(0, 10)}`,
+      title: `${ticker} institutional ownership snapshot`,
+      url: `https://www.nasdaq.com/market-activity/stocks/${ticker.toLowerCase()}/institutional-holdings`,
+      publishedAt: args.fetchedAt,
+      discoveredAt: args.fetchedAt,
+      fetchedAt: args.fetchedAt,
+      body: [
+        holdingsPct !== undefined
+          ? `Institutional ownership: ${holdingsPct.toFixed(2)}%`
+          : "",
+        holders !== undefined
+          ? `Institutional holders: ${formatCompactNumber(holders)}`
+          : "",
+        sharesHeld !== undefined
+          ? `Shares held: ${formatCompactNumber(sharesHeld)}`
+          : "",
+        holdingsValue !== undefined
+          ? `Holdings value: ${formatCompactNumber(holdingsValue)}`
+          : "",
+        netActivity !== undefined
+          ? `Net institutional activity: ${formatCompactNumber(netActivity)} shares`
+          : "",
+        topHolders.length > 0
+          ? `Top holders: ${topHolders
+              .map(
+                (holder) =>
+                  `${holder.name} (${formatCompactNumber(parseNasdaqNumber(holder.shares))})`,
+              )
+              .join("; ")}`
+          : "",
+        "Institutional ownership is a sponsorship/liquidity signal; strong net activity can support a thesis but 13F-derived data can lag.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      rawPayload: {
+        ownership,
+        topHolders,
+        holdingsPct,
+        holders,
+        sharesHeld,
+        holdingsValue,
+        netActivity,
+      },
+      tickers: [ticker],
+    },
+  ];
+}
+
+function findNasdaqSummaryRow(
+  rows: NasdaqInsiderTradeSummaryRow[] | undefined,
+  label: RegExp,
+) {
+  return rows?.find((row) => label.test(row.insiderTrade ?? ""));
+}
+
+function transactionVerb(value: string | undefined) {
+  const normalized = value?.toLowerCase() ?? "";
+  if (normalized.includes("buy")) {
+    return "buy";
+  }
+  if (normalized.includes("sell") || normalized.includes("disposition")) {
+    return "sell";
+  }
+  return "other";
+}
+
+export function buildNasdaqInsiderTradeItems(args: {
+  response: NasdaqInsiderTradesResponse;
+  ticker: string;
+  fetchedAt: Date;
+  limit: number;
+}): IntelRawItemInput[] {
+  const ticker = normalizeTicker(args.ticker);
+  const tradeRows = args.response.data?.numberOfTrades?.rows ?? [];
+  const shareRows = args.response.data?.numberOfSharesTraded?.rows ?? [];
+  const transactions = (args.response.data?.transactionTable?.table?.rows ?? [])
+    .filter((row) => row.insider || row.transactionType)
+    .slice(0, args.limit);
+  if (
+    tradeRows.length === 0 &&
+    shareRows.length === 0 &&
+    transactions.length === 0
+  ) {
+    return [];
+  }
+
+  const buys3M = parseNasdaqNumber(
+    findNasdaqSummaryRow(tradeRows, /open market buys/i)?.months3,
+  );
+  const sells3M = parseNasdaqNumber(
+    findNasdaqSummaryRow(tradeRows, /number of sells/i)?.months3,
+  );
+  const buys12M = parseNasdaqNumber(
+    findNasdaqSummaryRow(tradeRows, /open market buys/i)?.months12,
+  );
+  const sells12M = parseNasdaqNumber(
+    findNasdaqSummaryRow(tradeRows, /number of sells/i)?.months12,
+  );
+  const sharesBought3M = parseNasdaqNumber(
+    findNasdaqSummaryRow(shareRows, /shares bought/i)?.months3,
+  );
+  const sharesSold3M = parseNasdaqNumber(
+    findNasdaqSummaryRow(shareRows, /shares sold/i)?.months3,
+  );
+  const netActivity3M = parseNasdaqNumber(
+    findNasdaqSummaryRow(shareRows, /net activity/i)?.months3,
+  );
+  const totalRecords = parseNasdaqNumber(
+    args.response.data?.transactionTable?.totalRecords,
+  );
+  const latestTransaction = transactions[0];
+  const latestDate = latestTransaction?.lastDate;
+  const latestPublishedAt = latestDate
+    ? parseNasdaqDate(latestDate)
+    : args.fetchedAt;
+  const latestRows = transactions.slice(0, 5);
+  const recentSellRows = transactions.filter(
+    (row) => transactionVerb(row.transactionType) === "sell",
+  ).length;
+  const recentBuyRows = transactions.filter(
+    (row) => transactionVerb(row.transactionType) === "buy",
+  ).length;
+
+  return [
+    {
+      source: "nasdaq_insider_trades",
+      sourceType: "company",
+      sourceId: `nasdaq:insider-trades:${ticker}:${latestDate ?? nowIso().slice(0, 10)}`,
+      title: `${ticker} insider trading snapshot`,
+      url: `https://www.nasdaq.com/market-activity/stocks/${ticker.toLowerCase()}/insider-activity`,
+      publishedAt: latestPublishedAt,
+      discoveredAt: args.fetchedAt,
+      fetchedAt: args.fetchedAt,
+      body: [
+        buys3M !== undefined || sells3M !== undefined
+          ? `3-month trades: ${buys3M ?? 0} buys / ${sells3M ?? 0} sells`
+          : "",
+        buys12M !== undefined || sells12M !== undefined
+          ? `12-month trades: ${buys12M ?? 0} buys / ${sells12M ?? 0} sells`
+          : "",
+        sharesBought3M !== undefined
+          ? `3-month shares bought: ${formatCompactNumber(sharesBought3M)}`
+          : "",
+        sharesSold3M !== undefined
+          ? `3-month shares sold: ${formatCompactNumber(sharesSold3M)}`
+          : "",
+        netActivity3M !== undefined
+          ? `3-month net insider activity: ${formatCompactNumber(netActivity3M)} shares`
+          : "",
+        totalRecords !== undefined
+          ? `Transaction rows available: ${formatCompactNumber(totalRecords)}`
+          : "",
+        `Latest rows analyzed: ${transactions.length} (${recentBuyRows} buy-like / ${recentSellRows} sell-like)`,
+        latestRows.length > 0
+          ? `Latest transactions: ${latestRows
+              .map(
+                (row) =>
+                  `${row.lastDate ?? "unknown date"} ${row.insider ?? "unknown insider"} ${row.transactionType ?? "transaction"} ${formatCompactNumber(parseNasdaqNumber(row.sharesTraded))} @ ${row.lastPrice ?? "n/a"}`,
+              )
+              .join("; ")}`
+          : "",
+        "Insider activity is an alignment/risk signal; routine automatic sales are weaker than open-market buys or cluster buying.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      rawPayload: {
+        tradeRows,
+        shareRows,
+        latestRows,
+        buys3M,
+        sells3M,
+        buys12M,
+        sells12M,
+        sharesBought3M,
+        sharesSold3M,
+        netActivity3M,
+        totalRecords,
+        recentBuyRows,
+        recentSellRows,
+      },
+      tickers: [ticker],
+    },
+  ];
+}
+
+async function collectNasdaqOwnershipSignals(
+  entry: UniverseEntry,
+  preset: DeepResearchPreset,
+): Promise<SourceCollectionResult> {
+  const startedAt = new Date();
+  const ticker = normalizeTicker(entry.ticker);
+  const insiderLimit = envNumber(
+    "INTEL_NASDAQ_INSIDER_TRADES_LIMIT",
+    presetLimit(preset, { fast: 20, deep: 60, exhaustive: 120 }),
+  );
+  const ownershipUrl = new URL(
+    `/api/company/${encodeURIComponent(ticker)}/ownership-summary`,
+    NASDAQ_BASE_URL,
+  );
+  const insiderUrl = new URL(
+    `/api/company/${encodeURIComponent(ticker)}/insider-trades`,
+    NASDAQ_BASE_URL,
+  );
+
+  const [ownership, insider] = await Promise.all([
+    fetchJson<NasdaqOwnershipSummaryResponse>(ownershipUrl, nasdaqHeaders()),
+    fetchJson<NasdaqInsiderTradesResponse>(insiderUrl, nasdaqHeaders()),
+  ]);
+  const fetchedAt = new Date();
+  const ownershipItems = ownership.data
+    ? buildNasdaqInstitutionalOwnershipItems({
+        response: ownership.data,
+        ticker,
+        fetchedAt,
+      })
+    : [];
+  const insiderItems = insider.data
+    ? buildNasdaqInsiderTradeItems({
+        response: insider.data,
+        ticker,
+        fetchedAt,
+        limit: insiderLimit,
+      })
+    : [];
+
+  return {
+    items: [...ownershipItems, ...insiderItems],
+    diagnostics: [
+      makeDiagnostic({
+        source: "nasdaq_institutional_ownership",
+        label: `ticker-institutional-ownership:${ticker}`,
+        startedAt,
+        status: ownership.status === 200 ? "ok" : "failed",
+        itemCount: ownershipItems.length,
+        message:
+          ownership.status === 200
+            ? undefined
+            : `HTTP ${ownership.status}: ${ownership.text.slice(0, 160)}`,
+        metadata: { ticker },
+      }),
+      makeDiagnostic({
+        source: "nasdaq_insider_trades",
+        label: `ticker-insider-trades:${ticker}`,
+        startedAt,
+        status: insider.status === 200 ? "ok" : "failed",
+        itemCount: insiderItems.length,
+        message:
+          insider.status === 200
+            ? undefined
+            : `HTTP ${insider.status}: ${insider.text.slice(0, 160)}`,
+        metadata: {
+          ticker,
+          limit: insiderLimit,
+          returnedRows:
+            insider.data?.data?.transactionTable?.table?.rows?.length ?? 0,
+        },
+      }),
+    ],
+  };
+}
+
 export function buildFinnhubEarningsCalendarItems(args: {
   response: FinnhubEarningsCalendarResponse;
   ticker: string;
@@ -2092,6 +2428,7 @@ export async function collectDeepSourceItems(
     chart,
     nasdaq,
     nasdaqAnalyst,
+    ownership,
     rss,
     releases,
     social,
@@ -2103,6 +2440,7 @@ export async function collectDeepSourceItems(
     collectYahooChartContext(entry, horizon),
     collectNasdaqPositioning(entry, preset),
     collectNasdaqAnalystAndEarnings(entry, preset),
+    collectNasdaqOwnershipSignals(entry, preset),
     collectRss(entry, horizon, preset),
     collectCompanyReleases(entry, horizon, preset),
     collectSocial(entry, horizon, preset),
@@ -2117,6 +2455,7 @@ export async function collectDeepSourceItems(
       ...chart.items,
       ...nasdaq.items,
       ...nasdaqAnalyst.items,
+      ...ownership.items,
       ...rss.items,
       ...releases.items,
       ...social.items,
@@ -2129,6 +2468,7 @@ export async function collectDeepSourceItems(
       ...chart.diagnostics,
       ...nasdaq.diagnostics,
       ...nasdaqAnalyst.diagnostics,
+      ...ownership.diagnostics,
       ...rss.diagnostics,
       ...releases.diagnostics,
       ...social.diagnostics,

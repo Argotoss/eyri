@@ -6,6 +6,7 @@ export type SourceCategory =
   | "event_calendar"
   | "analyst_research"
   | "market_positioning"
+  | "ownership"
   | "primary_filings"
   | "company_release"
   | "news"
@@ -266,6 +267,36 @@ const SOURCE_REGISTRY: Record<string, SourceProfile> = {
     limitations:
       "historical execution context only; it is not an upcoming earnings estimate feed",
   },
+  nasdaq_institutional_ownership: {
+    key: "nasdaq_institutional_ownership",
+    displayName: "Nasdaq Institutional Ownership",
+    category: "ownership",
+    reliability: "medium",
+    qualityScore: 76,
+    evidenceWeight: 0.68,
+    cost: "free",
+    rateLimit: "unofficial Nasdaq endpoint behavior",
+    freshness: "13F/reporting-cycle dependent",
+    coverage:
+      "institutional ownership percentage, holders, shares held, holdings value, net activity, and top holders",
+    limitations:
+      "institutional data can lag because much of it derives from reporting-cycle filings",
+  },
+  nasdaq_insider_trades: {
+    key: "nasdaq_insider_trades",
+    displayName: "Nasdaq Insider Trades",
+    category: "ownership",
+    reliability: "medium",
+    qualityScore: 73,
+    evidenceWeight: 0.64,
+    cost: "free",
+    rateLimit: "unofficial Nasdaq endpoint behavior",
+    freshness: "filing/provider dependent",
+    coverage:
+      "3-month and 12-month insider buy/sell counts, share activity, net activity, and latest transaction rows",
+    limitations:
+      "automatic sales and compensation transactions are weak standalone signals",
+  },
   google_news: {
     key: "google_news",
     displayName: "Google News RSS",
@@ -445,6 +476,9 @@ export function sourceCoverageGaps(args: {
   }
   if (!categories.has("market_positioning")) {
     gaps.push("No options or short-interest positioning source completed.");
+  }
+  if (!categories.has("ownership")) {
+    gaps.push("No institutional or insider ownership source completed.");
   }
   if (!categories.has("news") && !categories.has("news_discovery")) {
     gaps.push("No news source completed.");
