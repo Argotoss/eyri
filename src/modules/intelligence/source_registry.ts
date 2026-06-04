@@ -4,6 +4,7 @@ export type SourceCategory =
   | "market_data"
   | "fundamentals"
   | "event_calendar"
+  | "analyst_research"
   | "primary_filings"
   | "company_release"
   | "news"
@@ -109,7 +110,7 @@ const SOURCE_REGISTRY: Record<string, SourceProfile> = {
   finnhub_recommendations: {
     key: "finnhub_recommendations",
     displayName: "Finnhub Recommendations",
-    category: "news",
+    category: "analyst_research",
     reliability: "medium",
     qualityScore: 78,
     evidenceWeight: 0.72,
@@ -118,6 +119,35 @@ const SOURCE_REGISTRY: Record<string, SourceProfile> = {
     freshness: "provider dependent",
     coverage: "analyst recommendation trends",
     limitations: "summary-level analyst data, not full research notes",
+  },
+  finnhub_price_target: {
+    key: "finnhub_price_target",
+    displayName: "Finnhub Price Targets",
+    category: "analyst_research",
+    reliability: "medium",
+    qualityScore: 80,
+    evidenceWeight: 0.76,
+    cost: "configured_api",
+    rateLimit: "Finnhub API plan limits",
+    freshness: "provider dependent",
+    coverage: "analyst target high, low, mean, median, and update timestamp",
+    limitations:
+      "consensus target snapshots lag real research notes and need revision context",
+  },
+  finnhub_upgrade_downgrade: {
+    key: "finnhub_upgrade_downgrade",
+    displayName: "Finnhub Rating Revisions",
+    category: "analyst_research",
+    reliability: "high",
+    qualityScore: 83,
+    evidenceWeight: 0.82,
+    cost: "configured_api",
+    rateLimit: "Finnhub API plan limits",
+    freshness: "provider dependent",
+    coverage:
+      "analyst firm upgrades, downgrades, initiations, and rating changes",
+    limitations:
+      "does not include the full analyst note or detailed price-target rationale",
   },
   finnhub_earnings_calendar: {
     key: "finnhub_earnings_calendar",
@@ -333,6 +363,9 @@ export function sourceCoverageGaps(args: {
   }
   if (!categories.has("company_release")) {
     gaps.push("No company-release or IR-discovery source completed.");
+  }
+  if (!categories.has("analyst_research")) {
+    gaps.push("No analyst research or revision source completed.");
   }
   if (!categories.has("news") && !categories.has("news_discovery")) {
     gaps.push("No news source completed.");

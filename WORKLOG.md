@@ -404,3 +404,44 @@ Remaining after this milestone:
 
 - This is still discovery through RSS, not a direct company IR feed.
 - Direct IR feeds, transcripts, and analyst estimate revisions are still missing.
+
+### Analyst Signal Source Milestone
+
+Goal: add analyst target and rating-revision evidence using the existing Finnhub
+integration, without adding a new provider dependency.
+
+Completed:
+
+- Added `finnhub_price_target` collection from Finnhub price-target snapshots.
+- Added `finnhub_upgrade_downgrade` collection from Finnhub rating revision
+  history.
+- Registered an `analyst_research` source category and coverage gap.
+- Moved `finnhub_recommendations` into the analyst-research category.
+- Added parser tests for price-target snapshots and rating revision rows.
+- Added source registry tests for the new analyst source quality metadata.
+- Documented `INTEL_FINNHUB_UPGRADE_DOWNGRADE_LIMIT`.
+
+Verification:
+
+- `deno task format`
+- `deno task test` passed with 47 tests.
+- `deno check --allow-import src/main.ts`
+- Real isolated smoke run with OpenRouter signal review disabled:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 205 raw items
+  - 168 relevant items
+  - HTML report written:
+    `data/smoke-reports/2-deep-intel-MU-1d-2026-06-04T22-13-04.html`
+  - evaluator sidecar written:
+    `data/smoke-reports/2-deep-intel-MU-1d-2026-06-04T22-13-04.evaluator.json`
+  - `finnhub_price_target` diagnostic persisted but returned HTTP 403 with
+    the current Finnhub key.
+  - `finnhub_upgrade_downgrade` diagnostic persisted but returned HTTP 403
+    with the current Finnhub key.
+  - GDELT returned HTTP 429; captured as nonfatal source failure.
+
+Remaining after this milestone:
+
+- Full analyst notes and detailed research PDFs are still not collected.
+- Consensus EPS/revenue estimate revision history is still missing.

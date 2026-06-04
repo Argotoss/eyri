@@ -60,6 +60,26 @@ type FinnhubEarningsCalendarResponse = {
   earningsCalendar?: FinnhubEarningsCalendarItem[];
 };
 
+type FinnhubPriceTargetResponse = {
+  symbol?: string;
+  targetHigh?: number | null;
+  targetLow?: number | null;
+  targetMean?: number | null;
+  targetMedian?: number | null;
+  lastUpdated?: string;
+};
+
+type FinnhubUpgradeDowngradeItem = {
+  symbol?: string;
+  company?: string;
+  firm?: string;
+  fromGrade?: string;
+  toGrade?: string;
+  action?: string;
+  gradeTime?: string;
+  period?: string;
+};
+
 type RedditChild = {
   data?: {
     id?: string;
@@ -546,6 +566,202 @@ async function collectFinnhub(
   };
 }
 
+export function buildFinnhubPriceTargetItems(args: {
+  response: FinnhubPriceTargetResponse;
+  ticker: string;
+  fetchedAt: Date;
+}): IntelRawItemInput[] {
+  const ticker = normalizeTicker(args.ticker);
+  const responseTicker = normalizeTicker(args.response.symbol ?? ticker);
+  if (responseTicker !== ticker) {
+    return [];
+  }
+  const targetFields = [
+    args.response.targetHigh,
+    args.response.targetLow,
+    args.response.targetMean,
+    args.response.targetMedian,
+  ];
+  if (!targetFields.some((value) => typeof value === "number")) {
+    return [];
+  }
+  const updatedAt = parseDate(args.response.lastUpdated);
+  return [
+    {
+      source: "finnhub_price_target",
+      sourceType: "research",
+      sourceId: `finnhub:price-target:${ticker}:${args.response.lastUpdated ?? nowIso().slice(0, 10)}`,
+      title: `${ticker} analyst price target snapshot`,
+      url: `https://finance.yahoo.com/quote/${encodeURIComponent(ticker)}/analysis`,
+      publishedAt: updatedAt,
+      discoveredAt: args.fetchedAt,
+      fetchedAt: args.fetchedAt,
+      body: [
+        formatOptionalNumber("Target high", args.response.targetHigh),
+        formatOptionalNumber("Target mean", args.response.targetMean),
+        formatOptionalNumber("Target median", args.response.targetMedian),
+        formatOptionalNumber("Target low", args.response.targetLow),
+        args.response.lastUpdated
+          ? `Last updated: ${args.response.lastUpdated}`
+          : "",
+        "Analyst target snapshots are useful for estimate direction and consensus context, but they need corroboration from revisions, earnings, and price action.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      rawPayload: args.response,
+      tickers: [ticker],
+    },
+  ];
+}
+
+export function buildFinnhubUpgradeDowngradeItems(args: {
+  response: FinnhubUpgradeDowngradeItem[];
+  ticker: string;
+  fetchedAt: Date;
+  limit: number;
+}): IntelRawItemInput[] {
+  const ticker = normalizeTicker(args.ticker);
+  return args.response
+    .filter((item) => normalizeTicker(item.symbol ?? ticker) === ticker)
+    .slice(0, args.limit)
+    .map((item, index): IntelRawItemInput => {
+      const firm = item.firm || "Analyst firm";
+      const action = item.action || "rating action";
+      const fromGrade = item.fromGrade || "n/a";
+      const toGrade = item.toGrade || "n/a";
+      const publishedAt = parseDate(item.gradeTime ?? item.period);
+      return {
+        source: "finnhub_upgrade_downgrade",
+        sourceType: "research",
+        sourceId: `finnhub:upgrade-downgrade:${ticker}:${item.gradeTime ?? item.period ?? index}:${firm}:${fromGrade}:${toGrade}`,
+        title: `${ticker} ${firm} ${action}: ${fromGrade} -> ${toGrade}`,
+        url: `https://finance.yahoo.com/quote/${encodeURIComponent(ticker)}/analysis`,
+        publishedAt,
+        discoveredAt: args.fetchedAt,
+        fetchedAt: args.fetchedAt,
+        body: [
+          item.company ? `Company: ${item.company}` : "",
+          `Firm: ${firm}`,
+          `Action: ${action}`,
+          `Rating: ${fromGrade} -> ${toGrade}`,
+          item.gradeTime ? `Grade time: ${item.gradeTime}` : "",
+          item.period ? `Period: ${item.period}` : "",
+          "Fresh upgrades, downgrades, initiations, and reiterations can explain near-term positioning when they align with catalysts and market reaction.",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        rawPayload: item,
+        tickers: [ticker],
+      };
+    });
+}
+
+async function collectFinnhubAnalystSignals(
+  entry: UniverseEntry,
+  horizon: IntelHorizon,
+  preset: DeepResearchPreset,
+): Promise<SourceCollectionResult> {
+  const startedAt = new Date();
+  const apiKey = env("FINNHUB_API_KEY");
+  const ticker = normalizeTicker(entry.ticker);
+  if (!apiKey) {
+    return {
+      items: [],
+      diagnostics: [
+        makeDiagnostic({
+          source: "finnhub_price_target",
+          label: `ticker-analyst-price-target:${ticker}`,
+          startedAt,
+          status: "failed",
+          itemCount: 0,
+          message: "FINNHUB_API_KEY is not configured",
+        }),
+        makeDiagnostic({
+          source: "finnhub_upgrade_downgrade",
+          label: `ticker-analyst-revisions:${ticker}`,
+          startedAt,
+          status: "failed",
+          itemCount: 0,
+          message: "FINNHUB_API_KEY is not configured",
+        }),
+      ],
+    };
+  }
+
+  const range = dateRange(horizon);
+  const revisionLimit = envNumber(
+    "INTEL_FINNHUB_UPGRADE_DOWNGRADE_LIMIT",
+    presetLimit(preset, { fast: 12, deep: 40, exhaustive: 80 }),
+  );
+
+  const priceTargetUrl = new URL(
+    "/api/v1/stock/price-target",
+    FINNHUB_BASE_URL,
+  );
+  priceTargetUrl.searchParams.set("symbol", ticker);
+  priceTargetUrl.searchParams.set("token", apiKey);
+
+  const revisionsUrl = new URL(
+    "/api/v1/stock/upgrade-downgrade",
+    FINNHUB_BASE_URL,
+  );
+  revisionsUrl.searchParams.set("symbol", ticker);
+  revisionsUrl.searchParams.set("from", yyyyMmDd(range.from));
+  revisionsUrl.searchParams.set("to", yyyyMmDd(range.to));
+  revisionsUrl.searchParams.set("token", apiKey);
+
+  const [priceTarget, revisions] = await Promise.all([
+    fetchJson<FinnhubPriceTargetResponse>(priceTargetUrl),
+    fetchJson<FinnhubUpgradeDowngradeItem[]>(revisionsUrl),
+  ]);
+  const fetchedAt = new Date();
+  const priceTargetItems = priceTarget.data
+    ? buildFinnhubPriceTargetItems({
+        response: priceTarget.data,
+        ticker,
+        fetchedAt,
+      })
+    : [];
+  const revisionItems = Array.isArray(revisions.data)
+    ? buildFinnhubUpgradeDowngradeItems({
+        response: revisions.data,
+        ticker,
+        fetchedAt,
+        limit: revisionLimit,
+      })
+    : [];
+
+  return {
+    items: [...priceTargetItems, ...revisionItems],
+    diagnostics: [
+      makeDiagnostic({
+        source: "finnhub_price_target",
+        label: `ticker-analyst-price-target:${ticker}`,
+        startedAt,
+        status: priceTarget.status === 200 ? "ok" : "failed",
+        itemCount: priceTargetItems.length,
+        message:
+          priceTarget.status === 200
+            ? undefined
+            : `HTTP ${priceTarget.status}: ${priceTarget.text.slice(0, 160)}`,
+        metadata: { ticker },
+      }),
+      makeDiagnostic({
+        source: "finnhub_upgrade_downgrade",
+        label: `ticker-analyst-revisions:${ticker}`,
+        startedAt,
+        status: revisions.status === 200 ? "ok" : "failed",
+        itemCount: revisionItems.length,
+        message:
+          revisions.status === 200
+            ? undefined
+            : `HTTP ${revisions.status}: ${revisions.text.slice(0, 160)}`,
+        metadata: { ticker, limit: revisionLimit },
+      }),
+    ],
+  };
+}
+
 export function buildFinnhubEarningsCalendarItems(args: {
   response: FinnhubEarningsCalendarResponse;
   ticker: string;
@@ -970,19 +1186,22 @@ export async function collectDeepSourceItems(
   horizon: IntelHorizon,
   preset: DeepResearchPreset = "deep",
 ): Promise<SourceCollectionResult> {
-  const [alpaca, finnhub, earnings, rss, releases, social] = await Promise.all([
-    collectAlpacaNews(entry, horizon, preset),
-    collectFinnhub(entry, horizon, preset),
-    collectFinnhubEarningsCalendar(entry, horizon),
-    collectRss(entry, horizon, preset),
-    collectCompanyReleases(entry, horizon, preset),
-    collectSocial(entry, horizon, preset),
-  ]);
+  const [alpaca, finnhub, analyst, earnings, rss, releases, social] =
+    await Promise.all([
+      collectAlpacaNews(entry, horizon, preset),
+      collectFinnhub(entry, horizon, preset),
+      collectFinnhubAnalystSignals(entry, horizon, preset),
+      collectFinnhubEarningsCalendar(entry, horizon),
+      collectRss(entry, horizon, preset),
+      collectCompanyReleases(entry, horizon, preset),
+      collectSocial(entry, horizon, preset),
+    ]);
 
   return {
     items: [
       ...alpaca.items,
       ...finnhub.items,
+      ...analyst.items,
       ...earnings.items,
       ...rss.items,
       ...releases.items,
@@ -991,6 +1210,7 @@ export async function collectDeepSourceItems(
     diagnostics: [
       ...alpaca.diagnostics,
       ...finnhub.diagnostics,
+      ...analyst.diagnostics,
       ...earnings.diagnostics,
       ...rss.diagnostics,
       ...releases.diagnostics,

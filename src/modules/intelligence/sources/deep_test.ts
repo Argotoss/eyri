@@ -1,6 +1,8 @@
 import {
   buildCompanyReleaseRssItems,
   buildFinnhubEarningsCalendarItems,
+  buildFinnhubPriceTargetItems,
+  buildFinnhubUpgradeDowngradeItems,
   companyReleaseSearchQuery,
 } from "./deep.ts";
 
@@ -56,6 +58,76 @@ Deno.test("Finnhub earnings calendar items become company catalyst evidence", ()
   assert(
     items[0].fetchedAt?.getTime() === fetchedAt.getTime(),
     "expected fetchedAt preservation",
+  );
+});
+
+Deno.test("Finnhub price targets become analyst research evidence", () => {
+  const fetchedAt = new Date("2026-06-03T12:00:00.000Z");
+  const items = buildFinnhubPriceTargetItems({
+    ticker: "MU",
+    fetchedAt,
+    response: {
+      symbol: "MU",
+      targetHigh: 1450,
+      targetLow: 900,
+      targetMean: 1125,
+      targetMedian: 1100,
+      lastUpdated: "2026-06-02",
+    },
+  });
+
+  assert(items.length === 1, "expected one price target item");
+  assert(items[0].source === "finnhub_price_target", "expected source key");
+  assert(items[0].sourceType === "research", "expected research source type");
+  assert(items[0].body?.includes("Target mean: 1125"), "expected mean target");
+  assert(items[0].body?.includes("Target low: 900"), "expected low target");
+  assert(
+    items[0].publishedAt.toISOString().startsWith("2026-06-02"),
+    "expected last updated date",
+  );
+});
+
+Deno.test("Finnhub rating revisions become analyst action evidence", () => {
+  const fetchedAt = new Date("2026-06-03T12:00:00.000Z");
+  const items = buildFinnhubUpgradeDowngradeItems({
+    ticker: "MU",
+    fetchedAt,
+    limit: 1,
+    response: [
+      {
+        symbol: "MU",
+        company: "Micron Technology",
+        firm: "Example Capital",
+        fromGrade: "Neutral",
+        toGrade: "Buy",
+        action: "upgrade",
+        gradeTime: "2026-06-03T10:15:00.000Z",
+      },
+      {
+        symbol: "NVDA",
+        firm: "Other Firm",
+        fromGrade: "Buy",
+        toGrade: "Hold",
+        action: "downgrade",
+        gradeTime: "2026-06-03T10:20:00.000Z",
+      },
+    ],
+  });
+
+  assert(items.length === 1, "expected ticker-specific limited item");
+  assert(
+    items[0].source === "finnhub_upgrade_downgrade",
+    "expected source key",
+  );
+  assert(items[0].sourceType === "research", "expected research source type");
+  assert(items[0].title.includes("Neutral -> Buy"), "expected rating change");
+  assert(
+    items[0].body?.includes("Firm: Example Capital"),
+    "expected analyst firm",
+  );
+  assert(
+    items[0].publishedAt.toISOString() === "2026-06-03T10:15:00.000Z",
+    "expected grade time",
   );
 });
 
