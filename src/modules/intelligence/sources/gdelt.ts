@@ -40,8 +40,14 @@ type GdeltFetchResult = {
   diagnostic: SourceDiagnostic;
 };
 
+type GdeltRateLimitState = {
+  lastRequestAt?: number;
+  disabledUntil?: number;
+};
+
 let lastGdeltRequestAt = 0;
 let gdeltDisabledUntil = 0;
+let gdeltRequestQueue: Promise<void> = Promise.resolve();
 const gdeltCache = new Map<
   string,
   { fetchedAt: number; result: GdeltFetchResult }
@@ -67,14 +73,103 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function gdeltStatePath() {
+  return (
+    Deno.env.get("INTEL_GDELT_STATE_PATH")?.trim() || "data/gdelt-state.json"
+  );
+}
+
+async function ensureParentDir(path: string) {
+  const normalized = path.replaceAll("\\", "/");
+  const slash = normalized.lastIndexOf("/");
+  if (slash <= 0) {
+    return;
+  }
+  await Deno.mkdir(normalized.slice(0, slash), { recursive: true });
+}
+
+async function readGdeltState(): Promise<GdeltRateLimitState> {
+  try {
+    const text = await Deno.readTextFile(gdeltStatePath());
+    const parsed = JSON.parse(text) as GdeltRateLimitState;
+    return {
+      lastRequestAt: Number.isFinite(parsed.lastRequestAt)
+        ? parsed.lastRequestAt
+        : undefined,
+      disabledUntil: Number.isFinite(parsed.disabledUntil)
+        ? parsed.disabledUntil
+        : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+async function writeGdeltState(update: GdeltRateLimitState) {
+  const current = await readGdeltState();
+  const next = {
+    lastRequestAt: Math.max(
+      current.lastRequestAt ?? 0,
+      update.lastRequestAt ?? 0,
+    ),
+    disabledUntil: Math.max(
+      current.disabledUntil ?? 0,
+      update.disabledUntil ?? 0,
+    ),
+  };
+  const path = gdeltStatePath();
+  await ensureParentDir(path);
+  await Deno.writeTextFile(path, JSON.stringify(next, null, 2));
+}
+
 async function throttleGdelt() {
   const delayMs = envNumber("INTEL_GDELT_DELAY_MS", 6500);
-  const elapsed = Date.now() - lastGdeltRequestAt;
+  const state = await readGdeltState();
+  const previousRequestAt = Math.max(
+    lastGdeltRequestAt,
+    state.lastRequestAt ?? 0,
+  );
+  const elapsed = Date.now() - previousRequestAt;
   const waitMs = Math.max(0, delayMs - elapsed);
   if (waitMs > 0) {
     await sleep(waitMs);
   }
   lastGdeltRequestAt = Date.now();
+  await writeGdeltState({ lastRequestAt: lastGdeltRequestAt });
+}
+
+async function queuedGdeltRequest<T>(operation: () => Promise<T>): Promise<T> {
+  const run = gdeltRequestQueue.then(async () => {
+    await throttleGdelt();
+    return await operation();
+  });
+  gdeltRequestQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return await run;
+}
+
+export async function queuedGdeltRequestForTest<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
+  return await queuedGdeltRequest(operation);
+}
+
+export function resetGdeltRequestStateForTest() {
+  lastGdeltRequestAt = 0;
+  gdeltDisabledUntil = 0;
+  gdeltRequestQueue = Promise.resolve();
+  gdeltCache.clear();
+}
+
+export async function resetPersistentGdeltStateForTest() {
+  resetGdeltRequestStateForTest();
+  try {
+    await Deno.remove(gdeltStatePath());
+  } catch {
+    // no state file
+  }
 }
 
 function cacheTtlMs() {
@@ -178,6 +273,27 @@ async function fetchGdeltArticles(
       }),
     };
   }
+  const persistedState = await readGdeltState();
+  const persistedDisabledUntil = persistedState.disabledUntil ?? 0;
+  if (Date.now() < persistedDisabledUntil) {
+    const waitSeconds = Math.ceil((persistedDisabledUntil - Date.now()) / 1000);
+    gdeltDisabledUntil = Math.max(gdeltDisabledUntil, persistedDisabledUntil);
+    return {
+      articles: [],
+      diagnostic: diagnostic({
+        label,
+        startedAt,
+        status: "failed",
+        itemCount: 0,
+        message: `GDELT temporarily disabled after shared rate limiting; retry in ${waitSeconds}s`,
+        metadata: {
+          query,
+          disabledUntil: new Date(persistedDisabledUntil),
+          sharedBackoff: true,
+        },
+      }),
+    };
+  }
 
   const url = new URL(GDELT_DOC_URL);
   url.searchParams.set("query", query);
@@ -190,10 +306,11 @@ async function fetchGdeltArticles(
   const maxRetries = envNumber("INTEL_GDELT_MAX_RETRIES", 2);
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     try {
-      await throttleGdelt();
-      const response = await fetch(url, {
-        headers: { "User-Agent": "Eyri market intelligence" },
-      });
+      const response = await queuedGdeltRequest(() =>
+        fetch(url, {
+          headers: { "User-Agent": "Eyri market intelligence" },
+        }),
+      );
       const text = await response.text();
       if (!response.ok) {
         const message = `HTTP ${response.status}: ${text.slice(0, 180)}`;
@@ -204,6 +321,7 @@ async function fetchGdeltArticles(
           : retryDelayMs(attempt + 1);
         if (response.status === 429) {
           gdeltDisabledUntil = Date.now() + disabledMs;
+          await writeGdeltState({ disabledUntil: gdeltDisabledUntil });
         }
         const failed = {
           articles: [],

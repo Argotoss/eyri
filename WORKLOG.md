@@ -760,3 +760,42 @@ Remaining after this milestone:
 - Readiness is a deterministic triage score, not a final model evaluation.
 - The next evaluator layer should use this block to decide whether bullish,
   bearish, and neutral evaluators have enough evidence to judge the setup.
+
+### GDELT Shared Rate-Limit Milestone
+
+Goal: reduce noisy GDELT HTTP 429 failures during repeated local bot/smoke runs
+and future multi-ticker scans.
+
+Completed:
+
+- Added an in-process GDELT request queue so concurrent calls are serialized.
+- Added shared GDELT throttle state on disk at `data/gdelt-state.json` by
+  default.
+- The shared state tracks the last request timestamp and shared cooldown after
+  HTTP 429 responses.
+- Added `INTEL_GDELT_STATE_PATH` so tests or deployments can choose a different
+  state file.
+- Added unit coverage proving concurrent queued GDELT requests are spaced.
+- Updated README scan/source controls.
+
+Verification:
+
+- `deno task format`
+- `deno check --allow-import src/main.ts scripts/intel-smoke.ts`
+- `deno task test` passed with 55 tests.
+- `deno task smoke:intel:fast`:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 232 raw items
+  - 159 relevant items
+  - GDELT diagnostic was `ok` with 40 items
+  - HTML report written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-05T12-42-44.html`
+  - evaluator sidecar written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-05T12-42-44.evaluator.json`
+
+Remaining after this milestone:
+
+- GDELT can still rate-limit at the upstream/IP level; this change makes the bot
+  share cooldown state and avoid bursty self-inflicted requests.
+- Cross-process writes are best-effort JSON state, not a locked database row.
