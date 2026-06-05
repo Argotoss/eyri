@@ -885,3 +885,49 @@ Remaining after this milestone:
 
 - Direction balance is still deterministic. The evaluator layer should judge
   whether the directional split actually supports action, caution, or rejection.
+
+### Dossier Delta Milestone
+
+Goal: make repeat `/intel TICKER` runs compare the current stock dossier against
+the previous comparable deep report, not just list raw source item deltas.
+
+Completed:
+
+- Added `getLatestIntelReportForUniverse` storage helper.
+- Deep ticker reports now load the previous report for the same chat and
+  `deep research TICKER` universe summary.
+- Added deterministic `dossierDelta` to evaluator sidecars when previous
+  comparable evaluator JSON exists.
+- Added a Dossier Delta panel to deep HTML reports.
+- Added a compact delta line to Telegram deep-intel summaries.
+- Delta compares:
+  - stock score change
+  - readiness score change
+  - previous/current evidence direction
+  - whether the direction changed
+- Baseline reports explicitly show that no previous comparable report exists.
+- Updated tests and README documentation.
+
+Verification:
+
+- `deno task format`
+- `deno check --allow-import src/main.ts scripts/intel-smoke.ts`
+- `deno task test` passed with 55 tests.
+- `deno task smoke:intel:fast`:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 194 raw items
+  - 155 relevant items
+  - HTML report written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-05T13-12-39.html`
+  - evaluator sidecar written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-05T13-12-39.evaluator.json`
+  - isolated smoke artifact contains the baseline Dossier Delta panel
+  - unit test covers the comparable previous-evaluator path
+  - GDELT returned HTTP 429 in this smoke run and was captured as nonfatal
+
+Remaining after this milestone:
+
+- Dossier delta compares structured scores/direction only; it does not yet
+  compare thesis text or explain exactly which evidence packet caused the score
+  change.

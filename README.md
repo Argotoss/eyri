@@ -110,10 +110,10 @@ reviewed by the cheap signal model before persistence; set
 Deep reports also persist an evaluator-ready `.evaluator.json` sidecar with the
 decision dossier, action-readiness triage, signal counts, top signals, evidence
 balance, evidence packets, source coverage by evidence class, source
-diagnostics, and capped source text for later model evaluation. The HTML report
-includes the same source coverage summary so missing analyst, ownership,
-positioning, social, market, or primary data is visible before reading the full
-source appendix.
+diagnostics, comparable-report dossier deltas when available, and capped source
+text for later model evaluation. The HTML report includes the same source
+coverage summary so missing analyst, ownership, positioning, social, market, or
+primary data is visible before reading the full source appendix.
 
 Every intelligence run persists raw fetched items, item distillations, evidence
 packets, timing rows, model token/cost estimates, and the rendered report file.

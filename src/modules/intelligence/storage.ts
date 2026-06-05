@@ -740,6 +740,37 @@ export function getLatestIntelReport(
   return row ? rowToReport(row) : null;
 }
 
+export function getLatestIntelReportForUniverse(
+  database: Database,
+  chatId: string | number,
+  universeSummary: string,
+): StoredIntelReport | null {
+  ensureIntelligenceSchema(database);
+  const row = database
+    .prepare(`
+      SELECT
+        id,
+        chat_id,
+        horizon,
+        universe_summary,
+        summary_text,
+        html,
+        file_path,
+        file_bytes,
+        evaluator_file_path,
+        evaluator_file_bytes,
+        evaluator_json,
+        created_at
+      FROM intel_reports
+      WHERE chat_id = ? AND universe_summary = ?
+      ORDER BY id DESC
+      LIMIT 1
+    `)
+    .get(toChatId(chatId), universeSummary) as ReportRow | undefined;
+
+  return row ? rowToReport(row) : null;
+}
+
 export function getIntelStatus(
   database: Database,
   chatId: string | number,

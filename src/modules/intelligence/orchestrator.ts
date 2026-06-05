@@ -21,6 +21,7 @@ import { buildStockIntel } from "./stock.ts";
 import {
   createSourceRun,
   finishSourceRun,
+  getLatestIntelReportForUniverse,
   getRunItemDelta,
   saveMarketSnapshots,
   saveEvidencePackets,
@@ -502,6 +503,11 @@ export async function runDeepIntelligenceReport({
       market: reportSnapshots[0],
       fundamentals: fundamentals[0],
     });
+    const previousReport = getLatestIntelReportForUniverse(
+      database,
+      chatId,
+      `deep research ${entry.ticker}`,
+    );
     const report = await timed(timings, "build-report", () =>
       buildDeepIntelReport({
         entry,
@@ -511,6 +517,8 @@ export async function runDeepIntelligenceReport({
         events: rankedEvents,
         stock,
         research,
+        previousEvaluatorPacket: previousReport?.evaluatorJson,
+        previousReportId: previousReport?.id,
       }),
     );
     const savedReport = await timed(timings, "save-report", async () =>

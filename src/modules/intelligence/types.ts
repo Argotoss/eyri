@@ -373,6 +373,15 @@ export type EvaluatorPacket = {
     topMixedPackets: string[];
     summary: string;
   };
+  dossierDelta?: {
+    previousReportId?: number;
+    scoreChange?: number;
+    readinessScoreChange?: number;
+    previousOverallDirection?: DirectionHint;
+    currentOverallDirection: DirectionHint;
+    directionChanged: boolean;
+    summary: string[];
+  };
   market?: MarketSnapshot;
   fundamentals?: FundamentalSnapshot;
   signalCounts: Record<SignalTier, number>;

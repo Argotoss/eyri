@@ -6,6 +6,7 @@ import {
   getIntelStatus,
   getLatestIntelDiagnostics,
   getLatestIntelReport,
+  getLatestIntelReportForUniverse,
   getRunItemDelta,
   saveReport,
   saveItemDistillations,
@@ -266,12 +267,21 @@ Deno.test("intelligence storage writes evaluator packet sidecar", async () => {
 
     const saved = saveReport(database, "chat-1", report);
     const stored = getLatestIntelReport(database, "chat-1");
+    const storedForUniverse = getLatestIntelReportForUniverse(
+      database,
+      "chat-1",
+      "deep research MU",
+    );
     const evaluatorFile = saved.evaluatorFile;
 
     if (!evaluatorFile?.path) {
       throw new Error("expected evaluator file path");
     }
     assert(stored?.evaluatorFilePath, "expected stored evaluator file path");
+    assert(
+      storedForUniverse?.id === stored?.id,
+      "expected stored report by universe",
+    );
     assert(stored?.evaluatorJson?.ticker === "MU", "expected stored JSON");
     assert(
       (await Deno.readTextFile(evaluatorFile.path)).includes('"ticker": "MU"'),

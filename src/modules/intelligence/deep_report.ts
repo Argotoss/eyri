@@ -50,6 +50,7 @@ type ActionReadiness = {
 };
 
 type EvidenceBalance = EvaluatorPacket["evidenceBalance"];
+type DossierDelta = NonNullable<EvaluatorPacket["dossierDelta"]>;
 
 function escapeHtml(value: string) {
   return value
@@ -568,6 +569,92 @@ function buildEvidenceBalance(research: DeepResearchData): EvidenceBalance {
   };
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function numberField(record: Record<string, unknown> | undefined, key: string) {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function directionField(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): DirectionHint | undefined {
+  const value = record?.[key];
+  return value === "positive" ||
+    value === "negative" ||
+    value === "mixed" ||
+    value === "unknown"
+    ? value
+    : undefined;
+}
+
+function signedChangeLabel(value: number) {
+  return `${value >= 0 ? "+" : ""}${value}`;
+}
+
+function buildDossierDelta(args: {
+  previousEvaluatorPacket?: Record<string, unknown>;
+  previousReportId?: number;
+  stock: StockIntel;
+  actionReadiness: ActionReadiness;
+  evidenceBalance: EvidenceBalance;
+}): DossierDelta | undefined {
+  const previous = args.previousEvaluatorPacket;
+  if (!previous) {
+    return undefined;
+  }
+  const previousVerdict = asRecord(previous.verdict);
+  const previousReadiness = asRecord(previous.actionReadiness);
+  const previousBalance = asRecord(previous.evidenceBalance);
+  const previousScore = numberField(previousVerdict, "score");
+  const previousReadinessScore = numberField(previousReadiness, "score");
+  const previousDirection = directionField(previousBalance, "overallDirection");
+  const scoreChange =
+    previousScore === undefined ? undefined : args.stock.score - previousScore;
+  const readinessScoreChange =
+    previousReadinessScore === undefined
+      ? undefined
+      : args.actionReadiness.score - previousReadinessScore;
+  const directionChanged =
+    previousDirection !== undefined &&
+    previousDirection !== args.evidenceBalance.overallDirection;
+  const summary = uniqueList(
+    [
+      scoreChange !== undefined
+        ? `Stock score ${signedChangeLabel(scoreChange)} versus previous report.`
+        : "",
+      readinessScoreChange !== undefined
+        ? `Readiness ${signedChangeLabel(readinessScoreChange)} versus previous report.`
+        : "",
+      previousDirection
+        ? directionChanged
+          ? `Direction changed from ${previousDirection} to ${args.evidenceBalance.overallDirection}.`
+          : `Direction stayed ${args.evidenceBalance.overallDirection}.`
+        : "",
+    ],
+    4,
+  );
+  return {
+    previousReportId: args.previousReportId,
+    scoreChange,
+    readinessScoreChange,
+    previousOverallDirection: previousDirection,
+    currentOverallDirection: args.evidenceBalance.overallDirection,
+    directionChanged,
+    summary:
+      summary.length > 0
+        ? summary
+        : ["Previous report existed, but comparable fields were missing."],
+  };
+}
+
 function edgeSummaryFor(stock: StockIntel, research: DeepResearchData) {
   const topPacket = research.evidencePackets[0];
   if (!topPacket) {
@@ -709,6 +796,7 @@ function telegramSummary(args: {
   dossier: DecisionDossier;
   actionReadiness: ActionReadiness;
   evidenceBalance: EvidenceBalance;
+  dossierDelta?: DossierDelta;
 }) {
   const change = args.research.changeSummary;
   const changeLine = change
@@ -732,6 +820,9 @@ function telegramSummary(args: {
     `Setup: ${args.dossier.setupType} - Window: ${args.dossier.timeWindow}`,
     `Readiness: ${args.actionReadiness.label} (${args.actionReadiness.score}/100)`,
     `Balance: ${args.evidenceBalance.overallDirection} (+${args.evidenceBalance.positiveScore} / -${args.evidenceBalance.negativeScore} / mixed ${args.evidenceBalance.mixedScore})`,
+    args.dossierDelta
+      ? `Delta: ${args.dossierDelta.summary.join(" ")}`
+      : "Delta: baseline or no previous comparable dossier",
     `Edge: ${args.dossier.edgeSummary}`,
     "",
     "Top evidence:",
@@ -938,6 +1029,31 @@ function evidenceBalanceSection(balance: EvidenceBalance) {
       ${listBlock("Top Negative Evidence", balance.topNegativePackets, "No negative packet extracted.")}
       ${listBlock("Top Mixed Evidence", balance.topMixedPackets, "No mixed packet extracted.")}
     </div>
+  </section>`;
+}
+
+function dossierDeltaSection(delta?: DossierDelta) {
+  if (!delta) {
+    return `<section class="panel">
+      <h2>Dossier Delta</h2>
+      <p class="meta">No previous comparable deep report was available for this ticker/chat.</p>
+    </section>`;
+  }
+  return `<section class="panel dossier">
+    <div class="theme-head">
+      <div>
+        <h2>Dossier Delta</h2>
+        <div class="meta">Compared with previous report${delta.previousReportId ? ` #${delta.previousReportId}` : ""}</div>
+      </div>
+      <div class="score">${delta.directionChanged ? "changed" : "same"}</div>
+    </div>
+    <div class="stat-grid">
+      <div class="stat"><span>Score change</span><strong>${delta.scoreChange === undefined ? "n/a" : signedChangeLabel(delta.scoreChange)}</strong></div>
+      <div class="stat"><span>Readiness change</span><strong>${delta.readinessScoreChange === undefined ? "n/a" : signedChangeLabel(delta.readinessScoreChange)}</strong></div>
+      <div class="stat"><span>Previous direction</span><strong>${escapeHtml(delta.previousOverallDirection ?? "n/a")}</strong></div>
+      <div class="stat"><span>Current direction</span><strong>${escapeHtml(delta.currentOverallDirection)}</strong></div>
+    </div>
+    ${listBlock("What Changed", delta.summary, "No comparable score fields changed.")}
   </section>`;
 }
 
@@ -1302,6 +1418,7 @@ function buildHtml(args: {
   dossier: DecisionDossier;
   actionReadiness: ActionReadiness;
   evidenceBalance: EvidenceBalance;
+  dossierDelta?: DossierDelta;
 }) {
   const rawById = new Map(args.rawItems.map((item) => [item.id, item]));
   const relevantIds = new Set(args.relevantItemIds);
@@ -1388,6 +1505,7 @@ function buildHtml(args: {
     ${dossierSection(args.dossier, args.stock)}
     ${actionReadinessSection(args.actionReadiness)}
     ${evidenceBalanceSection(args.evidenceBalance)}
+    ${dossierDeltaSection(args.dossierDelta)}
     ${changedSincePreviousSection(args.research)}
     <section class="panel">
       <h2>Market And Fundamentals</h2>
@@ -1437,6 +1555,7 @@ function buildEvaluatorPacket(args: {
   dossier: DecisionDossier;
   actionReadiness: ActionReadiness;
   evidenceBalance: EvidenceBalance;
+  dossierDelta?: DossierDelta;
 }): EvaluatorPacket {
   const rawById = new Map(args.rawItems.map((item) => [item.id, item]));
   const signalById = new Map(
@@ -1488,6 +1607,7 @@ function buildEvaluatorPacket(args: {
     decisionDossier: args.dossier,
     actionReadiness: args.actionReadiness,
     evidenceBalance: args.evidenceBalance,
+    dossierDelta: args.dossierDelta,
     market: args.stock.market,
     fundamentals: args.stock.fundamentals,
     signalCounts: args.research.signalCounts,
@@ -1536,6 +1656,8 @@ export async function buildDeepIntelReport(args: {
   events: IntelEventCluster[];
   stock: StockIntel;
   research: DeepResearchData;
+  previousEvaluatorPacket?: Record<string, unknown>;
+  previousReportId?: number;
 }) {
   const generatedAt = new Date();
   const narrative = await callDeepNarrativeModel({
@@ -1563,6 +1685,13 @@ export async function buildDeepIntelReport(args: {
     dossier,
   });
   const evidenceBalance = buildEvidenceBalance(args.research);
+  const dossierDelta = buildDossierDelta({
+    previousEvaluatorPacket: args.previousEvaluatorPacket,
+    previousReportId: args.previousReportId,
+    stock: args.stock,
+    actionReadiness,
+    evidenceBalance,
+  });
   const html = buildHtml({
     ...args,
     generatedAt,
@@ -1571,6 +1700,7 @@ export async function buildDeepIntelReport(args: {
     dossier,
     actionReadiness,
     evidenceBalance,
+    dossierDelta,
   });
   const evaluatorPacket = buildEvaluatorPacket({
     generatedAt,
@@ -1580,6 +1710,7 @@ export async function buildDeepIntelReport(args: {
     dossier,
     actionReadiness,
     evidenceBalance,
+    dossierDelta,
   });
 
   return {
@@ -1593,6 +1724,7 @@ export async function buildDeepIntelReport(args: {
       dossier,
       actionReadiness,
       evidenceBalance,
+      dossierDelta,
     }),
     executiveSummary,
     html,
