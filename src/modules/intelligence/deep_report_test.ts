@@ -210,6 +210,10 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
       "expected compact setup line",
     );
     assert(
+      report.telegramSummary.includes("Readiness:"),
+      "expected readiness summary",
+    );
+    assert(
       report.telegramSummary.includes("Invalidation:"),
       "expected invalidation summary",
     );
@@ -225,6 +229,7 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
       report.html.includes("Decision Dossier"),
       "expected decision dossier",
     );
+    assert(report.html.includes("Action Readiness"), "expected readiness");
     assert(report.html.includes("Time Window"), "expected time window section");
     assert(
       report.html.includes("Invalidation / Risks"),
@@ -246,6 +251,10 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
     assert(report.html.includes("Source Diagnostics"), "expected diagnostics");
     assert(report.html.includes("Source Appendix"), "expected source appendix");
     assert(report.evaluatorPacket?.ticker === "MU", "expected packet ticker");
+    assert(
+      report.evaluatorPacket?.actionReadiness.score !== undefined,
+      "expected evaluator readiness",
+    );
     assert(
       report.evaluatorPacket?.sourceCoverage.some(
         (row) => row.category === "news" && row.rawItemCount === 1,

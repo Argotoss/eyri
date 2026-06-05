@@ -216,6 +216,17 @@ Deno.test("intelligence storage writes evaluator packet sidecar", async () => {
           missingData: ["transcript"],
           humanChecks: ["read source"],
         },
+        actionReadiness: {
+          label: "watch closely",
+          score: 62,
+          freshnessScore: 90,
+          corroborationScore: 60,
+          marketConfirmationScore: 50,
+          dataCompletenessScore: 70,
+          reasons: ["fresh evidence"],
+          blockers: ["single-source packet"],
+          nextChecks: ["read source"],
+        },
         signalCounts: {
           critical: 1,
           high: 0,

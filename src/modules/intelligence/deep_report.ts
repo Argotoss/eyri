@@ -36,6 +36,18 @@ type DecisionDossier = {
   humanChecks: string[];
 };
 
+type ActionReadiness = {
+  label: string;
+  score: number;
+  freshnessScore: number;
+  corroborationScore: number;
+  marketConfirmationScore: number;
+  dataCompletenessScore: number;
+  reasons: string[];
+  blockers: string[];
+  nextChecks: string[];
+};
+
 function escapeHtml(value: string) {
   return value
     .replaceAll("&", "&amp;")
@@ -45,6 +57,10 @@ function escapeHtml(value: string) {
 
 function escapeHtmlAttribute(value: string) {
   return escapeHtml(value).replaceAll('"', "&quot;");
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function formatMoney(value?: number, digits = 2) {
@@ -312,6 +328,162 @@ function latestEvidenceDate(
     .sort((dateA, dateB) => dateB.getTime() - dateA.getTime())[0];
 }
 
+function horizonFreshHours(horizon: IntelHorizon) {
+  if (horizon === "1d") {
+    return 24;
+  }
+  if (horizon === "3d") {
+    return 72;
+  }
+  return 336;
+}
+
+function buildActionReadiness(args: {
+  horizon: IntelHorizon;
+  stock: StockIntel;
+  research: DeepResearchData;
+  rawItems: IntelRawItem[];
+  dossier: DecisionDossier;
+}): ActionReadiness {
+  const rawById = new Map(args.rawItems.map((item) => [item.id, item]));
+  const latest = latestEvidenceDate(args.research, rawById);
+  const ageHours = latest
+    ? Math.max(0, (Date.now() - latest.getTime()) / 3_600_000)
+    : Number.POSITIVE_INFINITY;
+  const freshHours = horizonFreshHours(args.horizon);
+  const freshnessScore = Number.isFinite(ageHours)
+    ? clamp(Math.round(100 - (ageHours / freshHours) * 70), 10, 100)
+    : 0;
+
+  const coverage = buildSourceCoverage(
+    args.rawItems,
+    args.research.diagnostics,
+  );
+  const categoriesWithItems = coverage.filter((row) => row.rawItemCount > 0);
+  const categoryCount = categoriesWithItems.length;
+  const highSignalCount =
+    args.research.signalCounts.critical + args.research.signalCounts.high;
+  const topPacket = args.research.evidencePackets[0];
+  const corroborationScore = clamp(
+    Math.round(
+      (topPacket?.sourceCount ?? 0) * 16 +
+        Math.min(args.research.evidencePackets.length, 5) * 8 +
+        Math.min(highSignalCount, 8) * 5 +
+        Math.min(categoryCount, 8) * 4,
+    ),
+    0,
+    100,
+  );
+
+  const move = Math.abs(args.stock.market?.percentChange ?? 0);
+  const volumeRatio = args.stock.market?.volumeRatio ?? 0;
+  const marketConfirmationScore = clamp(
+    Math.round(
+      Math.min(move, 12) * 5 +
+        Math.min(volumeRatio, 3) * 18 +
+        (args.stock.market?.price ? 10 : 0),
+    ),
+    0,
+    100,
+  );
+
+  const failedSteps = args.research.diagnostics.filter(
+    (diagnostic) => diagnostic.status === "failed",
+  ).length;
+  const partialSteps = args.research.diagnostics.filter(
+    (diagnostic) => diagnostic.status === "partial",
+  ).length;
+  const dataCompletenessScore = clamp(
+    Math.round(
+      100 -
+        failedSteps * 12 -
+        partialSteps * 5 -
+        Math.max(0, 6 - categoryCount) * 6 -
+        (args.stock.market ? 0 : 20) -
+        (args.stock.fundamentals ? 0 : 15),
+    ),
+    0,
+    100,
+  );
+
+  const score = clamp(
+    Math.round(
+      freshnessScore * 0.24 +
+        corroborationScore * 0.34 +
+        marketConfirmationScore * 0.18 +
+        dataCompletenessScore * 0.24,
+    ),
+    0,
+    100,
+  );
+  const label =
+    score >= 78 && args.stock.confidence !== "low"
+      ? "evaluator-ready"
+      : score >= 62
+        ? "watch closely"
+        : score >= 45
+          ? "research only"
+          : "insufficient evidence";
+
+  const reasons = uniqueList(
+    [
+      latest
+        ? `Freshness: latest packet evidence is ${formatAge(latest, new Date())}.`
+        : "Freshness: no packet evidence timestamp.",
+      `Corroboration: ${args.research.evidencePackets.length} packet(s), ${highSignalCount} critical/high signal item(s), ${categoryCount} evidence class(es).`,
+      args.stock.market
+        ? `Market confirmation: ${formatPercent(args.stock.market.percentChange)} move, ${args.stock.market.volumeRatio ? `${args.stock.market.volumeRatio.toFixed(2)}x relative volume` : "relative volume unavailable"}.`
+        : "Market confirmation: market snapshot unavailable.",
+      `Data completeness: ${failedSteps} failed and ${partialSteps} partial source step(s).`,
+    ],
+    6,
+  );
+  const blockers = uniqueList(
+    [
+      topPacket && topPacket.sourceCount <= 1
+        ? "Top evidence packet is still single-source."
+        : "",
+      highSignalCount === 0 ? "No critical/high signal items survived." : "",
+      args.stock.confidence === "low" ? "Stock-level confidence is low." : "",
+      marketConfirmationScore < 45
+        ? "Market reaction is weak or missing relative-volume context."
+        : "",
+      failedSteps > 0
+        ? `Some source classes failed: ${args.research.diagnostics
+            .filter((diagnostic) => diagnostic.status === "failed")
+            .slice(0, 4)
+            .map((diagnostic) => diagnostic.source)
+            .join(", ")}.`
+        : "",
+      ...args.dossier.missingData.slice(0, 3),
+    ],
+    6,
+  );
+  const nextChecks = uniqueList(
+    [
+      "Open the top primary or near-primary evidence link and verify the exact fact.",
+      "Check whether price and volume still confirm the catalyst after the latest candle.",
+      "Look for a contradicting source before treating the setup as actionable.",
+      blockers.length > 0
+        ? "Resolve the listed blockers before escalating to stronger evaluation."
+        : "Send the evaluator packet to stronger bullish/bearish/neutral models.",
+    ],
+    5,
+  );
+
+  return {
+    label,
+    score,
+    freshnessScore,
+    corroborationScore,
+    marketConfirmationScore,
+    dataCompletenessScore,
+    reasons,
+    blockers,
+    nextChecks,
+  };
+}
+
 function edgeSummaryFor(stock: StockIntel, research: DeepResearchData) {
   const topPacket = research.evidencePackets[0];
   if (!topPacket) {
@@ -451,6 +623,7 @@ function telegramSummary(args: {
   research: DeepResearchData;
   executiveSummary: string;
   dossier: DecisionDossier;
+  actionReadiness: ActionReadiness;
 }) {
   const change = args.research.changeSummary;
   const changeLine = change
@@ -472,6 +645,7 @@ function telegramSummary(args: {
     `Deep Intel ${args.stock.ticker} - ${args.research.horizon}/${args.research.preset}`,
     `Verdict: ${args.stock.verdict} (${args.stock.score}/100, ${args.stock.confidence})`,
     `Setup: ${args.dossier.setupType} - Window: ${args.dossier.timeWindow}`,
+    `Readiness: ${args.actionReadiness.label} (${args.actionReadiness.score}/100)`,
     `Edge: ${args.dossier.edgeSummary}`,
     "",
     "Top evidence:",
@@ -629,6 +803,30 @@ function dossierSection(dossier: DecisionDossier, stock: StockIntel) {
       ${listBlock("Invalidation / Risks", dossier.invalidation, "No explicit invalidation extracted.")}
       ${listBlock("Missing Data", dossier.missingData, "No major missing-data warning extracted.")}
       ${listBlock("Human Checks", dossier.humanChecks, "Review primary sources before acting.")}
+    </div>
+  </section>`;
+}
+
+function actionReadinessSection(readiness: ActionReadiness) {
+  return `<section class="panel dossier">
+    <div class="theme-head">
+      <div>
+        <h2>Action Readiness</h2>
+        <div class="meta">Deterministic triage for evaluator escalation, not a trade command</div>
+      </div>
+      <div class="score">${readiness.score}</div>
+    </div>
+    <div class="stat-grid">
+      <div class="stat"><span>Label</span><strong>${escapeHtml(readiness.label)}</strong></div>
+      <div class="stat"><span>Freshness</span><strong>${readiness.freshnessScore}/100</strong></div>
+      <div class="stat"><span>Corroboration</span><strong>${readiness.corroborationScore}/100</strong></div>
+      <div class="stat"><span>Market confirm</span><strong>${readiness.marketConfirmationScore}/100</strong></div>
+      <div class="stat"><span>Data complete</span><strong>${readiness.dataCompletenessScore}/100</strong></div>
+    </div>
+    <div class="dossier-grid">
+      ${listBlock("Why This Score", readiness.reasons, "No readiness reasons available.")}
+      ${listBlock("Blockers", readiness.blockers, "No major deterministic blockers.")}
+      ${listBlock("Next Checks", readiness.nextChecks, "Review evidence before acting.")}
     </div>
   </section>`;
 }
@@ -992,6 +1190,7 @@ function buildHtml(args: {
   executiveSummary: string;
   narrative: DeepNarrative | null;
   dossier: DecisionDossier;
+  actionReadiness: ActionReadiness;
 }) {
   const rawById = new Map(args.rawItems.map((item) => [item.id, item]));
   const relevantIds = new Set(args.relevantItemIds);
@@ -1076,6 +1275,7 @@ function buildHtml(args: {
       </div>
     </section>
     ${dossierSection(args.dossier, args.stock)}
+    ${actionReadinessSection(args.actionReadiness)}
     ${changedSincePreviousSection(args.research)}
     <section class="panel">
       <h2>Market And Fundamentals</h2>
@@ -1123,6 +1323,7 @@ function buildEvaluatorPacket(args: {
   research: DeepResearchData;
   rawItems: IntelRawItem[];
   dossier: DecisionDossier;
+  actionReadiness: ActionReadiness;
 }): EvaluatorPacket {
   const rawById = new Map(args.rawItems.map((item) => [item.id, item]));
   const signalById = new Map(
@@ -1172,6 +1373,7 @@ function buildEvaluatorPacket(args: {
       thesis: args.stock.thesis,
     },
     decisionDossier: args.dossier,
+    actionReadiness: args.actionReadiness,
     market: args.stock.market,
     fundamentals: args.stock.fundamentals,
     signalCounts: args.research.signalCounts,
@@ -1239,12 +1441,20 @@ export async function buildDeepIntelReport(args: {
     research: args.research,
     rawItems: args.rawItems,
   });
+  const actionReadiness = buildActionReadiness({
+    horizon: args.horizon,
+    stock: args.stock,
+    research: args.research,
+    rawItems: args.rawItems,
+    dossier,
+  });
   const html = buildHtml({
     ...args,
     generatedAt,
     executiveSummary,
     narrative,
     dossier,
+    actionReadiness,
   });
   const evaluatorPacket = buildEvaluatorPacket({
     generatedAt,
@@ -1252,6 +1462,7 @@ export async function buildDeepIntelReport(args: {
     research: args.research,
     rawItems: args.rawItems,
     dossier,
+    actionReadiness,
   });
 
   return {
@@ -1263,6 +1474,7 @@ export async function buildDeepIntelReport(args: {
       research: args.research,
       executiveSummary,
       dossier,
+      actionReadiness,
     }),
     executiveSummary,
     html,

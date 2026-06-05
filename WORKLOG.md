@@ -716,3 +716,47 @@ Remaining after this milestone:
   whether the evidence is sufficient.
 - Coverage does not yet score source sufficiency differently by ticker type,
   sector, exchange, or event type.
+
+### Action Readiness Triage Milestone
+
+Goal: make deep stock dossiers easier to triage before reading the long source
+appendix or escalating to stronger evaluator models.
+
+Completed:
+
+- Added deterministic `actionReadiness` to evaluator sidecars.
+- Added an Action Readiness panel to deep HTML reports.
+- Added a compact readiness line to Telegram summaries.
+- Readiness scores four dimensions:
+  - freshness
+  - corroboration
+  - market confirmation
+  - data completeness
+- Readiness includes reasons, blockers, and next human/model checks.
+- Updated report and storage tests for the new evaluator packet shape.
+- Updated README market-intelligence documentation.
+
+Verification:
+
+- `deno task format`
+- `deno check --allow-import src/main.ts scripts/intel-smoke.ts`
+- `deno task test` passed with 54 tests.
+- `deno task smoke:intel:fast`:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 99 raw items
+  - 57 relevant items
+  - HTML report written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-05T12-32-38.html`
+  - evaluator sidecar written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-05T12-32-38.evaluator.json`
+  - required source diagnostics passed
+  - GDELT returned HTTP 429 and was captured as a nonfatal source failure
+  - HTML artifact contains `Action Readiness`
+  - evaluator artifact contains `actionReadiness`
+
+Remaining after this milestone:
+
+- Readiness is a deterministic triage score, not a final model evaluation.
+- The next evaluator layer should use this block to decide whether bullish,
+  bearish, and neutral evaluators have enough evidence to judge the setup.

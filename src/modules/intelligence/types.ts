@@ -344,6 +344,17 @@ export type EvaluatorPacket = {
     missingData: string[];
     humanChecks: string[];
   };
+  actionReadiness: {
+    label: string;
+    score: number;
+    freshnessScore: number;
+    corroborationScore: number;
+    marketConfirmationScore: number;
+    dataCompletenessScore: number;
+    reasons: string[];
+    blockers: string[];
+    nextChecks: string[];
+  };
   market?: MarketSnapshot;
   fundamentals?: FundamentalSnapshot;
   signalCounts: Record<SignalTier, number>;
