@@ -672,3 +672,47 @@ Remaining after this milestone:
   affect non-required diagnostics.
 - The smoke runner currently asserts the MU-oriented source set, not arbitrary
   non-US tickers.
+
+### Source Coverage Summary Milestone
+
+Goal: make each deep report and evaluator packet show evidence-class breadth at
+a glance, so a human or later evaluator model can quickly see what classes of
+information are present or missing.
+
+Completed:
+
+- Added a Source Coverage panel to deep HTML reports.
+- Added `sourceCoverage` to evaluator sidecars.
+- Coverage rows are grouped by source registry category and include:
+  - contributing sources
+  - raw item count
+  - diagnostic item count
+  - OK, partial, and failed source steps
+- Updated report and storage tests for the new evaluator packet shape.
+- Updated README market-intelligence documentation.
+
+Verification:
+
+- `deno task format`
+- `deno task test` passed with 54 tests.
+- `deno check --allow-import src/main.ts scripts/intel-smoke.ts`
+- `deno task smoke:intel:fast`:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 232 raw items
+  - 157 relevant items
+  - HTML report written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-05T12-25-43.html`
+  - evaluator sidecar written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-05T12-25-43.evaluator.json`
+  - required source diagnostics passed
+  - GDELT returned `ok` with 40 items in this smoke run
+  - HTML artifact contains `Source Coverage`
+  - evaluator artifact contains `sourceCoverage`
+
+Remaining after this milestone:
+
+- Coverage is deterministic source-level metadata, not a model judgment of
+  whether the evidence is sufficient.
+- Coverage does not yet score source sufficiency differently by ticker type,
+  sector, exchange, or event type.

@@ -108,7 +108,10 @@ reviewed by the cheap signal model before persistence; set
 `INTEL_SIGNAL_REVIEW_ENABLED=false` to force deterministic-only scoring.
 Deep reports also persist an evaluator-ready `.evaluator.json` sidecar with the
 decision dossier, signal counts, top signals, evidence packets, source
-diagnostics, and capped source text for later model evaluation.
+coverage by evidence class, source diagnostics, and capped source text for
+later model evaluation. The HTML report includes the same source coverage
+summary so missing analyst, ownership, positioning, social, market, or primary
+data is visible before reading the full source appendix.
 
 Every intelligence run persists raw fetched items, item distillations, evidence
 packets, timing rows, model token/cost estimates, and the rendered report file.

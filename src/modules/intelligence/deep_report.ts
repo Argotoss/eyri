@@ -732,6 +732,112 @@ function sourceQualityPanel(
   </section>`;
 }
 
+function buildSourceCoverage(
+  rawItems: IntelRawItem[],
+  diagnostics: SourceDiagnostic[],
+) {
+  const byCategory = new Map<
+    string,
+    {
+      category: string;
+      sources: Set<string>;
+      rawItemCount: number;
+      diagnosticItemCount: number;
+      okSteps: number;
+      partialSteps: number;
+      failedSteps: number;
+    }
+  >();
+
+  function getCategoryRow(source: string) {
+    const category = getSourceProfile(source).category;
+    const existing = byCategory.get(category);
+    if (existing) {
+      existing.sources.add(source);
+      return existing;
+    }
+    const row = {
+      category,
+      sources: new Set([source]),
+      rawItemCount: 0,
+      diagnosticItemCount: 0,
+      okSteps: 0,
+      partialSteps: 0,
+      failedSteps: 0,
+    };
+    byCategory.set(category, row);
+    return row;
+  }
+
+  for (const item of rawItems) {
+    getCategoryRow(item.source).rawItemCount += 1;
+  }
+  for (const diagnostic of diagnostics) {
+    const row = getCategoryRow(diagnostic.source);
+    row.diagnosticItemCount += diagnostic.itemCount;
+    if (diagnostic.status === "ok") {
+      row.okSteps += 1;
+    } else if (diagnostic.status === "partial") {
+      row.partialSteps += 1;
+    } else {
+      row.failedSteps += 1;
+    }
+  }
+
+  return [...byCategory.values()]
+    .map((row) => ({
+      ...row,
+      sources: [...row.sources].sort(),
+    }))
+    .sort((left, right) => {
+      if (left.failedSteps !== right.failedSteps) {
+        return left.failedSteps - right.failedSteps;
+      }
+      return (
+        right.rawItemCount +
+        right.diagnosticItemCount -
+        (left.rawItemCount + left.diagnosticItemCount)
+      );
+    });
+}
+
+function sourceCoveragePanel(
+  rawItems: IntelRawItem[],
+  diagnostics: SourceDiagnostic[],
+) {
+  const coverage = buildSourceCoverage(rawItems, diagnostics);
+  const covered = coverage.filter(
+    (row) => row.rawItemCount > 0 || row.okSteps > 0,
+  ).length;
+  const failed = coverage.reduce((sum, row) => sum + row.failedSteps, 0);
+  const rows = coverage
+    .map(
+      (row) => `<tr>
+        <td><strong>${escapeHtml(row.category.replaceAll("_", " "))}</strong><span>${escapeHtml(row.sources.map(sourceDisplayName).join(", "))}</span></td>
+        <td>${row.sources.length}</td>
+        <td>${row.rawItemCount}</td>
+        <td>${row.diagnosticItemCount}</td>
+        <td>${row.okSteps}</td>
+        <td>${row.partialSteps}</td>
+        <td>${row.failedSteps}</td>
+      </tr>`,
+    )
+    .join("");
+  return `<section class="panel">
+    <h2>Source Coverage</h2>
+    <p class="meta">Coverage by evidence class. This shows whether the report is supported by primary data, market data, analyst context, positioning, ownership, news, social, and enrichment sources.</p>
+    <div class="stat-grid">
+      <div class="stat"><span>Covered classes</span><strong>${covered}</strong></div>
+      <div class="stat"><span>Coverage rows</span><strong>${coverage.length}</strong></div>
+      <div class="stat"><span>Failed steps</span><strong>${failed}</strong></div>
+    </div>
+    <table>
+      <thead><tr><th>Evidence Class</th><th>Sources</th><th>Raw Items</th><th>Diagnostic Items</th><th>OK</th><th>Partial</th><th>Failed</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="7">No source coverage available.</td></tr>'}</tbody>
+    </table>
+  </section>`;
+}
+
 function signalFilterPanel(research: DeepResearchData) {
   const counts = research.signalCounts;
   const rows = research.topSignals
@@ -982,6 +1088,7 @@ function buildHtml(args: {
       <h2>Data Quality</h2>
       <ul>${args.research.dataQuality.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul>
     </section>
+    ${sourceCoveragePanel(args.rawItems, args.research.diagnostics)}
     ${signalFilterPanel(args.research)}
     ${sourceQualityPanel(args.rawItems, args.research.diagnostics)}
     <section class="panel">
@@ -1070,6 +1177,18 @@ function buildEvaluatorPacket(args: {
     signalCounts: args.research.signalCounts,
     topSignals: args.research.topSignals.slice(0, 20),
     evidencePackets,
+    sourceCoverage: buildSourceCoverage(
+      args.rawItems,
+      args.research.diagnostics,
+    ).map((row) => ({
+      category: row.category,
+      sources: row.sources,
+      rawItemCount: row.rawItemCount,
+      diagnosticItemCount: row.diagnosticItemCount,
+      okSteps: row.okSteps,
+      partialSteps: row.partialSteps,
+      failedSteps: row.failedSteps,
+    })),
     dataQuality: args.research.dataQuality,
     sourceDiagnostics: args.research.diagnostics.map((diagnostic) => ({
       source: diagnostic.source,

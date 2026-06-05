@@ -236,6 +236,7 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
       "expected change section",
     );
     assert(report.html.includes("New Items"), "expected new items section");
+    assert(report.html.includes("Source Coverage"), "expected source coverage");
     assert(report.html.includes("Source Quality"), "expected source quality");
     assert(report.html.includes("Signal Filter"), "expected signal filter");
     assert(
@@ -245,6 +246,12 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
     assert(report.html.includes("Source Diagnostics"), "expected diagnostics");
     assert(report.html.includes("Source Appendix"), "expected source appendix");
     assert(report.evaluatorPacket?.ticker === "MU", "expected packet ticker");
+    assert(
+      report.evaluatorPacket?.sourceCoverage.some(
+        (row) => row.category === "news" && row.rawItemCount === 1,
+      ),
+      "expected evaluator source coverage",
+    );
     assert(
       report.evaluatorPacket?.evidencePackets[0]?.evidence[0]?.rawItemId === 1,
       "expected packet evidence item",

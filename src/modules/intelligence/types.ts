@@ -353,6 +353,15 @@ export type EvaluatorPacket = {
       evidence: EvaluatorEvidenceItem[];
     }
   >;
+  sourceCoverage: Array<{
+    category: string;
+    sources: string[];
+    rawItemCount: number;
+    diagnosticItemCount: number;
+    okSteps: number;
+    partialSteps: number;
+    failedSteps: number;
+  }>;
   dataQuality: string[];
   sourceDiagnostics: Array<{
     source: string;

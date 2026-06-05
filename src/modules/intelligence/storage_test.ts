@@ -225,6 +225,7 @@ Deno.test("intelligence storage writes evaluator packet sidecar", async () => {
         },
         topSignals: [],
         evidencePackets: [],
+        sourceCoverage: [],
         dataQuality: [],
         sourceDiagnostics: [],
       },
