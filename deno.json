@@ -2,7 +2,10 @@
   "tasks": {
     "dev": "deno run --watch --env-file=.env -A src/main.ts",
     "test": "deno test -A",
-    "format": "deno run -A @biomejs/biome format src --write; deno run -A @biomejs/biome lint src --write"
+    "format": "deno run -A @biomejs/biome format src scripts --write; deno run -A @biomejs/biome lint src scripts --write",
+    "smoke:intel": "deno run --env-file=.env -A scripts/intel-smoke.ts",
+    "smoke:intel:fast": "deno run --env-file=.env -A scripts/intel-smoke.ts --ticker MU --horizon 1d --preset fast",
+    "smoke:intel:deep": "deno run --env-file=.env -A scripts/intel-smoke.ts --ticker MU --horizon 1d --preset deep"
   },
   "imports": {
     "@biomejs/biome": "npm:@biomejs/biome@^2.1.3",

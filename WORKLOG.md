@@ -614,3 +614,61 @@ Remaining after this milestone:
 - Transcript text is still unavailable through the probed Nasdaq endpoints.
 - Insider activity still needs interpretation of routine/automatic sales versus
   open-market discretionary trades.
+
+### Deep Intel Smoke Task Milestone
+
+Goal: make the required `/intel MU 1d fast/deep` smoke checks reusable from the
+repo instead of relying on ad hoc inline scripts.
+
+Completed:
+
+- Added `scripts/intel-smoke.ts`.
+- Added `deno task smoke:intel`, `deno task smoke:intel:fast`, and
+  `deno task smoke:intel:deep`.
+- The smoke runner creates an isolated SQLite database and report directory per
+  run.
+- The smoke runner executes `runDeepIntelligenceReport` through the real deep
+  pipeline.
+- The smoke runner asserts:
+  - ticker identity
+  - minimum raw and relevant item counts
+  - HTML report file exists and is non-empty
+  - evaluator sidecar file exists and is non-empty
+  - required live source diagnostics are present and `ok`
+- Updated README test documentation.
+
+Verification:
+
+- `deno task format`
+- `deno task test` passed with 54 tests.
+- `deno check --allow-import src/main.ts scripts/intel-smoke.ts`
+- `deno task smoke:intel:fast`:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 192 raw items
+  - 152 relevant items
+  - HTML report written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-05T12-14-27.html`
+  - evaluator sidecar written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-05T12-14-27.evaluator.json`
+  - required source diagnostics passed
+  - GDELT returned HTTP 429; captured as nonfatal source failure
+- `deno task smoke:intel:deep`:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/deep`
+  - 282 raw items
+  - 209 relevant items
+  - HTML report written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-05T12-18-53.html`
+  - evaluator sidecar written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-05T12-18-53.evaluator.json`
+  - required source diagnostics passed
+  - GDELT returned HTTP 429 on both deep GDELT queries; captured as nonfatal
+    source failures
+
+Remaining after this milestone:
+
+- Smoke tasks are real network checks, so source outages/rate limits can still
+  affect non-required diagnostics.
+- The smoke runner currently asserts the MU-oriented source set, not arbitrary
+  non-US tickers.

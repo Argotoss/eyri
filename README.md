@@ -152,3 +152,14 @@ privacy mode is disabled for the bot. Addressed commands such as
 ```bash
 deno test -A
 ```
+
+Real deep-intelligence smoke checks:
+
+```bash
+deno task smoke:intel:fast
+deno task smoke:intel:deep
+```
+
+The smoke tasks run `/intel MU 1d` through the deep pipeline in an isolated
+SQLite database and assert that report files, evaluator sidecars, item counts,
+and required source diagnostics are present.
