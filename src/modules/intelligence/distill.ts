@@ -166,6 +166,49 @@ function catalystStrength(text: string, sourceType: string) {
   return clamp(score, 0, 100);
 }
 
+function riskSeverity(
+  text: string,
+  sourceType: string,
+  direction: DirectionHint,
+) {
+  const value = normalizeText(text);
+  let score =
+    direction === "negative"
+      ? 38
+      : direction === "mixed"
+        ? 28
+        : sourceType === "sec_filing"
+          ? 18
+          : 8;
+  if (
+    /\b(lawsuit|probe|investigation|regulator|ban|sanction|tariff|recall|default|bankruptcy|fraud)\b/.test(
+      value,
+    )
+  ) {
+    score += 42;
+  }
+  if (
+    /\b(cut|cuts|downgrade|downgraded|miss|misses|weak|delay)\b/.test(value)
+  ) {
+    score += 28;
+  }
+  if (
+    /\b(short interest|short seller|short report|bearish|puts?)\b/.test(value)
+  ) {
+    score += 22;
+  }
+  if (/\b(china|export control|macro|fed|rate|inflation)\b/.test(value)) {
+    score += 16;
+  }
+  if (/\b(form 4|automatic sale|10b5-1)\b/.test(value)) {
+    score += 10;
+  }
+  if (direction === "positive" && score < 35) {
+    score = Math.max(0, score - 10);
+  }
+  return clamp(score, 0, 100);
+}
+
 function relevanceScore(
   item: IntelRawItem,
   mention: TickerMention | undefined,
@@ -234,6 +277,7 @@ function noiseReason(args: {
   relevance: number;
   sourceQuality: number;
   catalystStrength: number;
+  riskSeverity: number;
   topic: string;
 }) {
   if (args.relevance < 50) {
@@ -248,7 +292,7 @@ function noiseReason(args: {
   if (args.topic === "sec_filings" && args.catalystStrength < 50) {
     return "routine SEC filing";
   }
-  if (args.catalystStrength < 35) {
+  if (args.catalystStrength < 35 && args.riskSeverity < 55) {
     return "no clear market-moving catalyst";
   }
   return undefined;
@@ -259,12 +303,14 @@ function signalScore(args: {
   novelty: number;
   sourceQuality: number;
   catalystStrength: number;
+  riskSeverity: number;
 }) {
   return Math.round(
-    args.relevance * 0.34 +
-      args.catalystStrength * 0.3 +
-      args.sourceQuality * 0.2 +
-      args.novelty * 0.16,
+    args.relevance * 0.31 +
+      args.catalystStrength * 0.27 +
+      args.sourceQuality * 0.18 +
+      args.novelty * 0.14 +
+      args.riskSeverity * 0.1,
   );
 }
 
@@ -290,6 +336,7 @@ function signalReasons(args: {
   novelty: number;
   sourceQuality: number;
   catalystStrength: number;
+  riskSeverity: number;
   direction: DirectionHint;
   noiseReason?: string;
 }) {
@@ -301,6 +348,11 @@ function signalReasons(args: {
     reasons.push("strong catalyst language");
   } else if (args.catalystStrength >= 55) {
     reasons.push("moderate catalyst language");
+  }
+  if (args.riskSeverity >= 70) {
+    reasons.push("high risk severity");
+  } else if (args.riskSeverity >= 50) {
+    reasons.push("moderate risk severity");
   }
   if (args.relevance >= 85) {
     reasons.push("high ticker relevance");
@@ -338,12 +390,14 @@ export function buildItemDistillations(args: {
     const novelty = noveltyScore(item, args.horizon);
     const strength = catalystStrength(text, item.sourceType);
     const direction = inferDirection(text);
+    const risk = riskSeverity(text, item.sourceType, direction);
     const summary = firstUsefulSentence(text);
     const facts = keyFacts(text);
     const reason = noiseReason({
       relevance,
       sourceQuality: source,
       catalystStrength: strength,
+      riskSeverity: risk,
       topic,
     });
     const score = signalScore({
@@ -351,6 +405,7 @@ export function buildItemDistillations(args: {
       novelty,
       sourceQuality: source,
       catalystStrength: strength,
+      riskSeverity: risk,
     });
     const distillation = {
       rawItemId: item.id,
@@ -364,6 +419,7 @@ export function buildItemDistillations(args: {
         novelty,
         sourceQuality: source,
         catalystStrength: strength,
+        riskSeverity: risk,
         direction,
         noiseReason: reason,
       }),
@@ -371,6 +427,7 @@ export function buildItemDistillations(args: {
       novelty,
       sourceQuality: source,
       catalystStrength: strength,
+      riskSeverity: risk,
       direction,
       timeSensitivity: timeSensitivity(item, strength),
       summary,
@@ -433,6 +490,32 @@ function confidence(score: number, sourceCount: number) {
   return "low";
 }
 
+function evidenceBreadthScore(args: {
+  sourceCount: number;
+  itemCount: number;
+  keyFactCount: number;
+}) {
+  return clamp(
+    Math.round(
+      Math.min(args.sourceCount, 5) * 16 +
+        Math.min(args.itemCount, 8) * 5 +
+        Math.min(args.keyFactCount, 6) * 4,
+    ),
+    0,
+    100,
+  );
+}
+
+function packetRiskSeverity(items: ItemDistillation[]) {
+  if (items.length === 0) {
+    return 0;
+  }
+  const maxRisk = Math.max(...items.map((item) => item.riskSeverity));
+  const averageRisk =
+    items.reduce((sum, item) => sum + item.riskSeverity, 0) / items.length;
+  return clamp(Math.round(maxRisk * 0.65 + averageRisk * 0.35), 0, 100);
+}
+
 export function buildEvidencePackets(args: {
   ticker: string;
   distillations: ItemDistillation[];
@@ -475,15 +558,22 @@ export function buildEvidencePackets(args: {
       top.reduce(
         (sum, item) =>
           sum +
-          item.relevance * 0.32 +
-          item.catalystStrength * 0.3 +
-          item.sourceQuality * 0.2 +
-          item.novelty * 0.18,
+          item.relevance * 0.3 +
+          item.catalystStrength * 0.27 +
+          item.sourceQuality * 0.18 +
+          item.novelty * 0.15 +
+          item.riskSeverity * 0.1,
         0,
       ) / top.length,
     );
     const direction = packetDirection(top);
     const facts = unique(top.flatMap((item) => item.keyFacts)).slice(0, 8);
+    const breadth = evidenceBreadthScore({
+      sourceCount: sources.length,
+      itemCount: top.length,
+      keyFactCount: facts.length,
+    });
+    const risk = packetRiskSeverity(top);
     const strongest = top[0];
     const title = packetTitle(topic);
     packets.push({
@@ -493,10 +583,15 @@ export function buildEvidencePackets(args: {
       title,
       direction,
       score,
-      confidence: confidence(score, sources.length),
+      evidenceBreadthScore: breadth,
+      riskSeverity: risk,
+      confidence: confidence(
+        Math.round(score * 0.85 + breadth * 0.15),
+        sources.length,
+      ),
       summary: strongest.summary,
       conclusion:
-        score >= 75
+        score >= 75 && breadth >= 55
           ? `${title} is a strong evidence cluster worth evaluator attention.`
           : score >= 55
             ? `${title} is relevant but needs confirmation.`

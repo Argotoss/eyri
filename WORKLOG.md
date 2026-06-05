@@ -799,3 +799,48 @@ Remaining after this milestone:
 - GDELT can still rate-limit at the upstream/IP level; this change makes the bot
   share cooldown state and avoid bursty self-inflicted requests.
 - Cross-process writes are best-effort JSON state, not a locked database row.
+
+### Evidence Risk And Breadth Milestone
+
+Goal: make the evidence packets more useful for human review and later evaluator
+models by separating risk severity and evidence breadth from generic signal
+score.
+
+Completed:
+
+- Added item-level `riskSeverity` to deterministic distillation.
+- Risk severity now contributes to signal scoring, so negative/risk catalysts
+  can surface even when they are not bullish.
+- Added packet-level `evidenceBreadthScore`.
+- Added packet-level `riskSeverity`.
+- Packet confidence now considers evidence breadth as well as score/source
+  count.
+- Deep report packet cards show breadth and risk in the metadata line.
+- Evaluator sidecars include the new packet fields automatically.
+- SQLite persistence now stores distillation risk severity and packet
+  breadth/risk.
+- Updated tests and README documentation.
+
+Verification:
+
+- `deno task format`
+- `deno check --allow-import src/main.ts scripts/intel-smoke.ts`
+- `deno task test` passed with 55 tests.
+- `deno task smoke:intel:fast`:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 194 raw items
+  - 153 relevant items
+  - HTML report written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-05T12-52-26.html`
+  - evaluator sidecar written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-05T12-52-26.evaluator.json`
+  - HTML artifact contains packet `breadth ... / risk ...` metadata
+  - evaluator artifact contains `evidenceBreadthScore` and `riskSeverity`
+  - GDELT returned HTTP 429 in this run and was captured as nonfatal
+
+Remaining after this milestone:
+
+- Risk severity is still deterministic keyword/rule based.
+- The evaluator layer should learn whether high risk is a bearish opportunity,
+  an invalidation condition, or simply a blocker depending on context.

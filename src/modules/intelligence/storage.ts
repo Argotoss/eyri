@@ -466,6 +466,7 @@ export function ensureIntelligenceSchema(database: Database) {
       novelty REAL NOT NULL,
       source_quality REAL NOT NULL,
       catalyst_strength REAL NOT NULL,
+      risk_severity REAL NOT NULL DEFAULT 0,
       direction TEXT NOT NULL,
       time_sensitivity TEXT NOT NULL,
       summary TEXT NOT NULL,
@@ -489,6 +490,8 @@ export function ensureIntelligenceSchema(database: Database) {
       title TEXT NOT NULL,
       direction TEXT NOT NULL,
       score REAL NOT NULL,
+      evidence_breadth_score REAL NOT NULL DEFAULT 0,
+      risk_severity REAL NOT NULL DEFAULT 0,
       confidence TEXT NOT NULL,
       summary TEXT NOT NULL,
       conclusion TEXT NOT NULL,
@@ -527,6 +530,24 @@ export function ensureIntelligenceSchema(database: Database) {
   `);
 
   addColumnIfMissing(database, "intel_raw_items", "discovered_at", "TEXT");
+  addColumnIfMissing(
+    database,
+    "intel_item_distillations",
+    "risk_severity",
+    "REAL NOT NULL DEFAULT 0",
+  );
+  addColumnIfMissing(
+    database,
+    "intel_evidence_packets",
+    "evidence_breadth_score",
+    "REAL NOT NULL DEFAULT 0",
+  );
+  addColumnIfMissing(
+    database,
+    "intel_evidence_packets",
+    "risk_severity",
+    "REAL NOT NULL DEFAULT 0",
+  );
   addColumnIfMissing(database, "intel_reports", "file_path", "TEXT");
   addColumnIfMissing(database, "intel_reports", "file_bytes", "INTEGER");
   addColumnIfMissing(database, "intel_reports", "evaluator_file_path", "TEXT");
@@ -1301,6 +1322,7 @@ export function saveItemDistillations(
       novelty,
       source_quality,
       catalyst_strength,
+      risk_severity,
       direction,
       time_sensitivity,
       summary,
@@ -1308,7 +1330,7 @@ export function saveItemDistillations(
       key_facts,
       noise_reason,
       created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(raw_item_id, ticker) DO UPDATE SET
       topic = excluded.topic,
       signal_tier = excluded.signal_tier,
@@ -1318,6 +1340,7 @@ export function saveItemDistillations(
       novelty = excluded.novelty,
       source_quality = excluded.source_quality,
       catalyst_strength = excluded.catalyst_strength,
+      risk_severity = excluded.risk_severity,
       direction = excluded.direction,
       time_sensitivity = excluded.time_sensitivity,
       summary = excluded.summary,
@@ -1339,6 +1362,7 @@ export function saveItemDistillations(
       item.novelty,
       item.sourceQuality,
       item.catalystStrength,
+      item.riskSeverity,
       item.direction,
       item.timeSensitivity,
       item.summary,
@@ -1365,6 +1389,8 @@ export function saveEvidencePackets(
       title,
       direction,
       score,
+      evidence_breadth_score,
+      risk_severity,
       confidence,
       summary,
       conclusion,
@@ -1373,9 +1399,11 @@ export function saveEvidencePackets(
       evidence_item_ids,
       source_count,
       noise_rejected_count
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(run_id, packet_id) DO UPDATE SET
       score = excluded.score,
+      evidence_breadth_score = excluded.evidence_breadth_score,
+      risk_severity = excluded.risk_severity,
       confidence = excluded.confidence,
       summary = excluded.summary,
       conclusion = excluded.conclusion,
@@ -1395,6 +1423,8 @@ export function saveEvidencePackets(
       packet.title,
       packet.direction,
       packet.score,
+      packet.evidenceBreadthScore,
+      packet.riskSeverity,
       packet.confidence,
       packet.summary,
       packet.conclusion,

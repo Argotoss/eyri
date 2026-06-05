@@ -139,6 +139,8 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
           title: "Supply, Demand, Pricing, And Margins",
           direction: "positive",
           score: 78,
+          evidenceBreadthScore: 36,
+          riskSeverity: 8,
           confidence: "low",
           summary: "Memory pricing improved.",
           conclusion:
@@ -260,6 +262,14 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
         (row) => row.category === "news" && row.rawItemCount === 1,
       ),
       "expected evaluator source coverage",
+    );
+    assert(
+      report.evaluatorPacket?.evidencePackets[0]?.evidenceBreadthScore === 36,
+      "expected packet breadth in evaluator packet",
+    );
+    assert(
+      report.evaluatorPacket?.evidencePackets[0]?.riskSeverity === 8,
+      "expected packet risk in evaluator packet",
     );
     assert(
       report.evaluatorPacket?.evidencePackets[0]?.evidence[0]?.rawItemId === 1,

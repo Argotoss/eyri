@@ -757,7 +757,7 @@ function packetCard(
     <div class="theme-head">
       <div>
         <h2>${escapeHtml(packet.title)}</h2>
-        <div class="meta">${escapeHtml(packet.direction)} / ${escapeHtml(packet.confidence)} / ${packet.sourceCount} source${packet.sourceCount === 1 ? "" : "s"} / ${packet.noiseRejectedCount} rejected</div>
+        <div class="meta">${escapeHtml(packet.direction)} / ${escapeHtml(packet.confidence)} / breadth ${packet.evidenceBreadthScore}/100 / risk ${packet.riskSeverity}/100 / ${packet.sourceCount} source${packet.sourceCount === 1 ? "" : "s"} / ${packet.noiseRejectedCount} rejected</div>
       </div>
       <div class="score">${packet.score}</div>
     </div>

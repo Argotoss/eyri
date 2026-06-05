@@ -146,6 +146,7 @@ Deno.test("intelligence storage persists item signal tiers", async () => {
         novelty: 90,
         sourceQuality: 82,
         catalystStrength: 65,
+        riskSeverity: 10,
         direction: "positive",
         timeSensitivity: "1d",
         summary: "Memory demand improved.",
@@ -157,12 +158,17 @@ Deno.test("intelligence storage persists item signal tiers", async () => {
 
     const row = database
       .prepare(`
-        SELECT signal_tier, signal_score, signal_reasons
+        SELECT signal_tier, signal_score, signal_reasons, risk_severity
         FROM intel_item_distillations
         WHERE raw_item_id = ?
       `)
       .get(item.id) as
-      | { signal_tier: string; signal_score: number; signal_reasons: string }
+      | {
+          signal_tier: string;
+          signal_score: number;
+          signal_reasons: string;
+          risk_severity: number;
+        }
       | undefined;
 
     assert(row?.signal_tier === "high", "expected signal tier");
@@ -171,6 +177,7 @@ Deno.test("intelligence storage persists item signal tiers", async () => {
       row?.signal_reasons.includes("high-quality source"),
       "expected signal reasons",
     );
+    assert(row?.risk_severity === 10, "expected risk severity");
   } finally {
     database.close();
   }

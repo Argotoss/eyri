@@ -201,6 +201,7 @@ export type ItemDistillation = {
   novelty: number;
   sourceQuality: number;
   catalystStrength: number;
+  riskSeverity: number;
   direction: DirectionHint;
   timeSensitivity: IntelHorizon | "low";
   summary: string;
@@ -228,6 +229,8 @@ export type EvidencePacket = {
   title: string;
   direction: DirectionHint;
   score: number;
+  evidenceBreadthScore: number;
+  riskSeverity: number;
   confidence: StockConfidence;
   summary: string;
   conclusion: string;

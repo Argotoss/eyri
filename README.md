@@ -102,7 +102,8 @@ price/fundamental snapshots. The attached report is built from scored evidence
 packets, with raw source lists moved into expandable appendices.
 Each raw item is distilled into a signal tier (`critical`, `high`, `medium`,
 `low`, or `noise`) with a score and short reasons before evidence packets are
-built.
+built. Distillation also scores risk severity, and evidence packets carry
+evidence-breadth and risk-severity fields for later evaluator models.
 When `OPENROUTER_API_KEY` is configured, the top signal candidates are also
 reviewed by the cheap signal model before persistence; set
 `INTEL_SIGNAL_REVIEW_ENABLED=false` to force deterministic-only scoring.
