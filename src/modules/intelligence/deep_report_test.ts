@@ -232,6 +232,7 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
       "expected decision dossier",
     );
     assert(report.html.includes("Action Readiness"), "expected readiness");
+    assert(report.html.includes("Evidence Balance"), "expected balance");
     assert(report.html.includes("Time Window"), "expected time window section");
     assert(
       report.html.includes("Invalidation / Risks"),
@@ -256,6 +257,10 @@ Deno.test("buildDeepIntelReport renders stock research report", async () => {
     assert(
       report.evaluatorPacket?.actionReadiness.score !== undefined,
       "expected evaluator readiness",
+    );
+    assert(
+      report.evaluatorPacket?.evidenceBalance.overallDirection === "positive",
+      "expected evaluator evidence balance",
     );
     assert(
       report.evaluatorPacket?.sourceCoverage.some(

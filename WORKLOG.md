@@ -844,3 +844,44 @@ Remaining after this milestone:
 - Risk severity is still deterministic keyword/rule based.
 - The evaluator layer should learn whether high risk is a bearish opportunity,
   an invalidation condition, or simply a blocker depending on context.
+
+### Evidence Balance Milestone
+
+Goal: make deep dossiers and evaluator packets explicitly show whether the
+current evidence stack is bullish, bearish, mixed, or mostly context.
+
+Completed:
+
+- Added deterministic `evidenceBalance` to evaluator sidecars.
+- Added an Evidence Balance panel to deep HTML reports.
+- Added a compact balance line to Telegram deep-intel summaries.
+- Balance tracks positive, negative, mixed, and unknown packet weights and
+  packet counts.
+- Balance lists top positive, negative, and mixed evidence packets.
+- Unknown/context packets are preserved, but they no longer override known
+  directional evidence when choosing `overallDirection`.
+- Updated tests and README documentation.
+
+Verification:
+
+- `deno task format`
+- `deno check --allow-import src/main.ts scripts/intel-smoke.ts`
+- `deno task test` passed with 55 tests.
+- `deno task smoke:intel:fast`:
+  - ticker: `MU`
+  - command path: deep report pipeline, `1d/fast`
+  - 194 raw items
+  - 156 relevant items
+  - HTML report written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-05T13-03-44.html`
+  - evaluator sidecar written:
+    `data/smoke-reports/1-deep-intel-MU-1d-2026-06-05T13-03-44.evaluator.json`
+  - evaluator artifact contains `evidenceBalance`
+  - final artifact reported `overallDirection: positive` with positive score
+    151 and unknown/context score 266
+  - GDELT returned HTTP 429 in this final run and was captured as nonfatal
+
+Remaining after this milestone:
+
+- Direction balance is still deterministic. The evaluator layer should judge
+  whether the directional split actually supports action, caution, or rejection.

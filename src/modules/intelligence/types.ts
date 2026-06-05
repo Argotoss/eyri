@@ -358,6 +358,21 @@ export type EvaluatorPacket = {
     blockers: string[];
     nextChecks: string[];
   };
+  evidenceBalance: {
+    overallDirection: DirectionHint;
+    positiveScore: number;
+    negativeScore: number;
+    mixedScore: number;
+    unknownScore: number;
+    positivePacketCount: number;
+    negativePacketCount: number;
+    mixedPacketCount: number;
+    unknownPacketCount: number;
+    topPositivePackets: string[];
+    topNegativePackets: string[];
+    topMixedPackets: string[];
+    summary: string;
+  };
   market?: MarketSnapshot;
   fundamentals?: FundamentalSnapshot;
   signalCounts: Record<SignalTier, number>;

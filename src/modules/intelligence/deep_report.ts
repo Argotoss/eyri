@@ -1,6 +1,7 @@
 import type {
   DeepResearchData,
   DeepResearchTheme,
+  DirectionHint,
   EvaluatorPacket,
   FundamentalSnapshot,
   IntelEventCluster,
@@ -47,6 +48,8 @@ type ActionReadiness = {
   blockers: string[];
   nextChecks: string[];
 };
+
+type EvidenceBalance = EvaluatorPacket["evidenceBalance"];
 
 function escapeHtml(value: string) {
   return value
@@ -484,6 +487,87 @@ function buildActionReadiness(args: {
   };
 }
 
+function packetDirectionalWeight(
+  packet: DeepResearchData["evidencePackets"][number],
+) {
+  return Math.round(
+    packet.score * 0.55 +
+      packet.evidenceBreadthScore * 0.25 +
+      packet.sourceCount * 4 +
+      packet.riskSeverity * (packet.direction === "negative" ? 0.2 : 0.08),
+  );
+}
+
+function packetLabel(packet: DeepResearchData["evidencePackets"][number]) {
+  return `${packet.title}: ${packet.score}/100, breadth ${packet.evidenceBreadthScore}/100, risk ${packet.riskSeverity}/100`;
+}
+
+function buildEvidenceBalance(research: DeepResearchData): EvidenceBalance {
+  const groups: Record<DirectionHint, typeof research.evidencePackets> = {
+    positive: [],
+    negative: [],
+    mixed: [],
+    unknown: [],
+  };
+  for (const packet of research.evidencePackets) {
+    groups[packet.direction].push(packet);
+  }
+  const weighted = (direction: DirectionHint) =>
+    groups[direction].reduce(
+      (sum, packet) => sum + packetDirectionalWeight(packet),
+      0,
+    );
+  const positiveScore = weighted("positive");
+  const negativeScore = weighted("negative");
+  const mixedScore = weighted("mixed");
+  const unknownScore = weighted("unknown");
+  const known = [
+    ["positive", positiveScore],
+    ["negative", negativeScore],
+    ["mixed", mixedScore],
+  ] as Array<[DirectionHint, number]>;
+  known.sort((left, right) => right[1] - left[1]);
+  const strongestKnown = known[0];
+  const overallDirection =
+    strongestKnown[1] === 0
+      ? "unknown"
+      : strongestKnown[0] === "mixed"
+        ? "mixed"
+        : positiveScore > 0 &&
+            negativeScore > 0 &&
+            Math.min(positiveScore, negativeScore) >=
+              Math.max(positiveScore, negativeScore) * 0.7
+          ? "mixed"
+          : strongestKnown[0];
+  const sortedLabels = (direction: DirectionHint) =>
+    groups[direction]
+      .toSorted(
+        (left, right) =>
+          packetDirectionalWeight(right) - packetDirectionalWeight(left),
+      )
+      .slice(0, 3)
+      .map(packetLabel);
+  const summary =
+    overallDirection === "mixed"
+      ? `Evidence is mixed: positive weight ${positiveScore}, negative weight ${negativeScore}, mixed weight ${mixedScore}.`
+      : `Dominant evidence direction is ${overallDirection}: positive ${positiveScore}, negative ${negativeScore}, mixed ${mixedScore}, unknown ${unknownScore}.`;
+  return {
+    overallDirection,
+    positiveScore,
+    negativeScore,
+    mixedScore,
+    unknownScore,
+    positivePacketCount: groups.positive.length,
+    negativePacketCount: groups.negative.length,
+    mixedPacketCount: groups.mixed.length,
+    unknownPacketCount: groups.unknown.length,
+    topPositivePackets: sortedLabels("positive"),
+    topNegativePackets: sortedLabels("negative"),
+    topMixedPackets: sortedLabels("mixed"),
+    summary,
+  };
+}
+
 function edgeSummaryFor(stock: StockIntel, research: DeepResearchData) {
   const topPacket = research.evidencePackets[0];
   if (!topPacket) {
@@ -624,6 +708,7 @@ function telegramSummary(args: {
   executiveSummary: string;
   dossier: DecisionDossier;
   actionReadiness: ActionReadiness;
+  evidenceBalance: EvidenceBalance;
 }) {
   const change = args.research.changeSummary;
   const changeLine = change
@@ -646,6 +731,7 @@ function telegramSummary(args: {
     `Verdict: ${args.stock.verdict} (${args.stock.score}/100, ${args.stock.confidence})`,
     `Setup: ${args.dossier.setupType} - Window: ${args.dossier.timeWindow}`,
     `Readiness: ${args.actionReadiness.label} (${args.actionReadiness.score}/100)`,
+    `Balance: ${args.evidenceBalance.overallDirection} (+${args.evidenceBalance.positiveScore} / -${args.evidenceBalance.negativeScore} / mixed ${args.evidenceBalance.mixedScore})`,
     `Edge: ${args.dossier.edgeSummary}`,
     "",
     "Top evidence:",
@@ -827,6 +913,30 @@ function actionReadinessSection(readiness: ActionReadiness) {
       ${listBlock("Why This Score", readiness.reasons, "No readiness reasons available.")}
       ${listBlock("Blockers", readiness.blockers, "No major deterministic blockers.")}
       ${listBlock("Next Checks", readiness.nextChecks, "Review evidence before acting.")}
+    </div>
+  </section>`;
+}
+
+function evidenceBalanceSection(balance: EvidenceBalance) {
+  return `<section class="panel dossier">
+    <div class="theme-head">
+      <div>
+        <h2>Evidence Balance</h2>
+        <div class="meta">Directional split for evaluator review</div>
+      </div>
+      <div class="score">${escapeHtml(balance.overallDirection)}</div>
+    </div>
+    <p>${escapeHtml(balance.summary)}</p>
+    <div class="stat-grid">
+      <div class="stat"><span>Positive</span><strong>${balance.positiveScore}</strong><span>${balance.positivePacketCount} packet(s)</span></div>
+      <div class="stat"><span>Negative</span><strong>${balance.negativeScore}</strong><span>${balance.negativePacketCount} packet(s)</span></div>
+      <div class="stat"><span>Mixed</span><strong>${balance.mixedScore}</strong><span>${balance.mixedPacketCount} packet(s)</span></div>
+      <div class="stat"><span>Unknown</span><strong>${balance.unknownScore}</strong><span>${balance.unknownPacketCount} packet(s)</span></div>
+    </div>
+    <div class="dossier-grid">
+      ${listBlock("Top Positive Evidence", balance.topPositivePackets, "No positive packet extracted.")}
+      ${listBlock("Top Negative Evidence", balance.topNegativePackets, "No negative packet extracted.")}
+      ${listBlock("Top Mixed Evidence", balance.topMixedPackets, "No mixed packet extracted.")}
     </div>
   </section>`;
 }
@@ -1191,6 +1301,7 @@ function buildHtml(args: {
   narrative: DeepNarrative | null;
   dossier: DecisionDossier;
   actionReadiness: ActionReadiness;
+  evidenceBalance: EvidenceBalance;
 }) {
   const rawById = new Map(args.rawItems.map((item) => [item.id, item]));
   const relevantIds = new Set(args.relevantItemIds);
@@ -1276,6 +1387,7 @@ function buildHtml(args: {
     </section>
     ${dossierSection(args.dossier, args.stock)}
     ${actionReadinessSection(args.actionReadiness)}
+    ${evidenceBalanceSection(args.evidenceBalance)}
     ${changedSincePreviousSection(args.research)}
     <section class="panel">
       <h2>Market And Fundamentals</h2>
@@ -1324,6 +1436,7 @@ function buildEvaluatorPacket(args: {
   rawItems: IntelRawItem[];
   dossier: DecisionDossier;
   actionReadiness: ActionReadiness;
+  evidenceBalance: EvidenceBalance;
 }): EvaluatorPacket {
   const rawById = new Map(args.rawItems.map((item) => [item.id, item]));
   const signalById = new Map(
@@ -1374,6 +1487,7 @@ function buildEvaluatorPacket(args: {
     },
     decisionDossier: args.dossier,
     actionReadiness: args.actionReadiness,
+    evidenceBalance: args.evidenceBalance,
     market: args.stock.market,
     fundamentals: args.stock.fundamentals,
     signalCounts: args.research.signalCounts,
@@ -1448,6 +1562,7 @@ export async function buildDeepIntelReport(args: {
     rawItems: args.rawItems,
     dossier,
   });
+  const evidenceBalance = buildEvidenceBalance(args.research);
   const html = buildHtml({
     ...args,
     generatedAt,
@@ -1455,6 +1570,7 @@ export async function buildDeepIntelReport(args: {
     narrative,
     dossier,
     actionReadiness,
+    evidenceBalance,
   });
   const evaluatorPacket = buildEvaluatorPacket({
     generatedAt,
@@ -1463,6 +1579,7 @@ export async function buildDeepIntelReport(args: {
     rawItems: args.rawItems,
     dossier,
     actionReadiness,
+    evidenceBalance,
   });
 
   return {
@@ -1475,6 +1592,7 @@ export async function buildDeepIntelReport(args: {
       executiveSummary,
       dossier,
       actionReadiness,
+      evidenceBalance,
     }),
     executiveSummary,
     html,
